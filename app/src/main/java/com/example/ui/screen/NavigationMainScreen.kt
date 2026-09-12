@@ -68,13 +68,11 @@ fun NavigationMainScreen(
 
     val rulerState by viewModel.rulerState.collectAsStateWithLifecycle()
     val routeBuilderState by viewModel.routeBuilderState.collectAsStateWithLifecycle()
-    val intersectionState by viewModel.intersectionState.collectAsStateWithLifecycle()
     val isCoordinateModalOpen by viewModel.isCoordinateModalOpen.collectAsStateWithLifecycle()
 
     var showAddWaypointDialog by remember { mutableStateOf(false) }
     var showSavedWaypointsSheet by remember { mutableStateOf(false) }
     var showSettlementSearchSheet by remember { mutableStateOf(false) }
-    var showIntersectionDialog by remember { mutableStateOf(false) }
     var showMapSourceMenu by remember { mutableStateOf(false) }
     var showDataExchangeDialog by remember { mutableStateOf(false) }
     var showBatteryOptimizationDialog by remember { mutableStateOf(false) }
@@ -158,7 +156,6 @@ fun NavigationMainScreen(
                 rulerState = rulerState,
                 onRulerPointChanged = { p1, p2 -> viewModel.updateRulerPoints(p1, p2) },
                 routeBuilderState = routeBuilderState,
-                intersectionState = intersectionState,
                 activeTrackPoints = currentTrackPoints,
                 angleUnit = userPreferences.defaultAngleUnit
             )
@@ -435,19 +432,6 @@ fun NavigationMainScreen(
                     Icon(Icons.Default.AltRoute, contentDescription = "Построение маршрута", modifier = Modifier.size(22.dp))
                 }
 
-                // 2-Ray Intersection Tool ("Засечка")
-                FloatingActionButton(
-                    onClick = {
-                        viewModel.openIntersectionTool()
-                        showIntersectionDialog = true
-                    },
-                    modifier = Modifier.size(48.dp).testTag("intersection_tool_button"),
-                    containerColor = Color(0xFF263238),
-                    contentColor = Color(0xFFFF7043)
-                ) {
-                    Icon(Icons.Default.ChangeHistory, contentDescription = "Засечка по 2 азимутам", modifier = Modifier.size(22.dp))
-                }
-
                 // Track Recording (Start / Stop Foreground Service)
                 val isRecording = (activeTrack != null && activeTrack!!.isActive) || viewModel.isTrackingServiceRunning.collectAsStateWithLifecycle().value
                 FloatingActionButton(
@@ -597,28 +581,6 @@ fun NavigationMainScreen(
                 viewModel.onMapTapped(pt)
             },
             onDismiss = { showSettlementSearchSheet = false }
-        )
-    }
-
-    // 2-Ray Intersection Dialog
-    if (showIntersectionDialog) {
-        IntersectionDialog(
-            state = intersectionState,
-            angleUnit = userPreferences.defaultAngleUnit,
-            onCalculate = { p1, a1, p2, a2 -> viewModel.updateIntersection(p1, a1, p2, a2) },
-            onSaveTargetPoint = { pt ->
-                viewModel.addWaypointAt(
-                    name = "Цель (Засечка)",
-                    latitude = pt.latitude,
-                    longitude = pt.longitude,
-                    altitude = pt.altitude,
-                    description = "Рассчитано засечкой по двум азимутам",
-                    colorArgb = 0xFFD32F2F.toInt()
-                )
-                showIntersectionDialog = false
-                Toast.makeText(context, "Точка цели сохранена в базу!", Toast.LENGTH_SHORT).show()
-            },
-            onDismiss = { showIntersectionDialog = false }
         )
     }
 
