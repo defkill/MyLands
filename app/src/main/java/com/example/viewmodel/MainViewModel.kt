@@ -79,7 +79,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _availableTileSources = MutableStateFlow<List<TileSource>>(TileSource.ALL)
     val availableTileSources: StateFlow<List<TileSource>> = _availableTileSources.asStateFlow()
 
-    private val _activeTileSource = MutableStateFlow(TileSource.OSM)
+    // Default to satellite: OSM's volunteer tile servers block app traffic that looks like
+    // bulk downloading, which is exactly this app's use case, so it is a poor default.
+    private val _activeTileSource = MutableStateFlow(TileSource.SATELLITE)
     val activeTileSource: StateFlow<TileSource> = _activeTileSource.asStateFlow()
 
     private val _activeMbtiles = MutableStateFlow<MbtilesTileSource?>(null)
@@ -402,6 +404,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun updateRulerPoints(start: GeoPoint, end: GeoPoint) {
         _rulerState.value = RulerState.calculate(start, end)
+    }
+
+    /**
+     * Purges cached tiles for the active layer. Use when a provider has been serving
+     * "Access blocked" placeholder tiles, which otherwise persist in the disk cache.
+     */
+    fun clearTileCacheForActiveSource() {
+        viewModelScope.launch(Dispatchers.IO) {
+            tileManager.clearDiskCache(_activeTileSource.value.id)
+        }
     }
 
     // --- Navigation Tools: Route Builder by Points ---
