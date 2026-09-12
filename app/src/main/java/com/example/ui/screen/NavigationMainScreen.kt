@@ -60,6 +60,7 @@ fun NavigationMainScreen(
     val userPreferences by viewModel.userPreferences.collectAsStateWithLifecycle()
 
     val waypoints by viewModel.waypoints.collectAsStateWithLifecycle()
+    val routes by viewModel.routes.collectAsStateWithLifecycle()
     val selectedWaypoint by viewModel.selectedWaypoint.collectAsStateWithLifecycle()
     val candidatePoint by viewModel.candidatePoint.collectAsStateWithLifecycle()
     val activeMapTool by viewModel.activeMapTool.collectAsStateWithLifecycle()
@@ -156,6 +157,7 @@ fun NavigationMainScreen(
                 rulerState = rulerState,
                 onRulerPointChanged = { p1, p2 -> viewModel.updateRulerPoints(p1, p2) },
                 routeBuilderState = routeBuilderState,
+                savedRoutes = routes,
                 activeTrackPoints = currentTrackPoints,
                 angleUnit = userPreferences.defaultAngleUnit
             )
@@ -358,6 +360,33 @@ fun NavigationMainScreen(
                 }
             }
 
+            // 2b. Top-Left Zoom Controls
+            Column(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(start = 12.dp, top = 96.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                SmallFloatingActionButton(
+                    onClick = { viewModel.zoomIn() },
+                    containerColor = Color(0xFF263238),
+                    contentColor = Color.White,
+                    modifier = Modifier.testTag("zoom_in_button")
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = "Приблизить")
+                }
+
+                SmallFloatingActionButton(
+                    onClick = { viewModel.zoomOut() },
+                    containerColor = Color(0xFF263238),
+                    contentColor = Color.White,
+                    modifier = Modifier.testTag("zoom_out_button")
+                ) {
+                    Icon(Icons.Default.Remove, contentDescription = "Отдалить")
+                }
+            }
+
             // 3. Right Floating Action Toolbar
             Column(
                 modifier = Modifier
@@ -374,26 +403,6 @@ fun NavigationMainScreen(
                     contentColor = Color.White
                 ) {
                     Icon(Icons.Default.MyLocation, contentDescription = "Мое местоположение", modifier = Modifier.size(22.dp))
-                }
-
-                // Zoom In
-                SmallFloatingActionButton(
-                    onClick = { viewModel.zoomIn() },
-                    containerColor = Color(0xFF263238),
-                    contentColor = Color.White,
-                    modifier = Modifier.testTag("zoom_in_button")
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = "Приблизить")
-                }
-
-                // Zoom Out
-                SmallFloatingActionButton(
-                    onClick = { viewModel.zoomOut() },
-                    containerColor = Color(0xFF263238),
-                    contentColor = Color.White,
-                    modifier = Modifier.testTag("zoom_out_button")
-                ) {
-                    Icon(Icons.Default.Remove, contentDescription = "Отдалить")
                 }
 
                 // Add Waypoint
@@ -515,12 +524,14 @@ fun NavigationMainScreen(
                     RouteBuilderPanel(
                         routeState = routeBuilderState,
                         allWaypoints = waypoints,
+                        savedRoutes = routes,
                         angleUnit = userPreferences.defaultAngleUnit,
                         onToggleWaypoint = { viewModel.toggleWaypointInRoute(it) },
                         onSaveRoute = {
                             viewModel.saveCurrentRoute()
                             Toast.makeText(context, "Маршрут сохранен!", Toast.LENGTH_SHORT).show()
                         },
+                        onLoadRoute = { viewModel.loadRouteIntoBuilder(it) },
                         onCancel = { viewModel.cancelRouteBuilder() }
                     )
                 }
