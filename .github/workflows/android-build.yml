@@ -35,8 +35,10 @@ jobs:
         with:
           gradle-version: 9.3.1
 
-      - name: Make gradlew executable
-        run: chmod +x ./gradlew
+      - name: Generate Gradle Wrapper Files
+  run: |
+    gradle wrapper --gradle-version 9.3.1
+    chmod +x ./gradlew
 
       - name: Lint with Gradle
         run: ./gradlew lint --continue
