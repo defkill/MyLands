@@ -40,6 +40,10 @@ jobs:
           gradle wrapper --gradle-version 9.3.1
           chmod +x ./gradlew
 
+      - name: Generate Debug Keystore
+        run: |
+          keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+
       - name: Lint with Gradle
         run: ./gradlew lint --continue
 
@@ -49,10 +53,9 @@ jobs:
           GRADLE_OPTS: "-Djava.awt.headless=true -Dorg.gradle.project.kotlin.compiler.execution.strategy=in-process"
 
       - name: Run Unit Tests
-        run: ./gradlew testDebugUnitTest --continue
-        continue-on-error: true
+        run: ./gradlew testDebugUnitTest --info
         env:
-          GRADLE_OPTS: "-Djava.awt.headless=true -Dorg.gradle.project.kotlin.compiler.execution.strategy=in-process"
+          GRADLE_OPTS: "-Djava.awt.headless=true -Dorg.gradle.project.kotlin.compiler.execution.strategy=in-process -Drobolectric.graphicsMode=binary"
 
       - name: Upload APKs to Artifacts
         uses: actions/upload-artifact@v4
