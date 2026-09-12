@@ -31,6 +31,15 @@ class TileManager(private val context: Context) {
         }
     }
 
+    companion object {
+        /**
+         * Must identify this specific application. OSM blocks generic/faked agents.
+         * Change the URL below to your own project page if you fork this.
+         */
+        const val TILE_USER_AGENT = "MyLands/1.0 (+https://github.com/defkill/MyLands)"
+        const val TILE_REFERER = "https://github.com/defkill/MyLands"
+    }
+
     private val baseCacheDir = File(context.cacheDir, "map_tiles")
     private var offlineZipFile: ZipFile? = null
     private var activeMbtilesSource: MbtilesTileSource? = null
@@ -154,12 +163,30 @@ class TileManager(private val context: Context) {
             val connection = (url.openConnection() as HttpURLConnection).apply {
                 connectTimeout = 4000
                 readTimeout = 4000
-                setRequestProperty("User-Agent", "OrientirNavApp/1.0 (Android; Offline GIS Engine)")
+                // Tile servers (notably OSM) require a specific, identifying User-Agent and a
+                // Referer. Generic or missing headers are actively blocked with a 403 "Access
+                // blocked" tile. Keep the contact URL real so operators can reach the author.
+                setRequestProperty("User-Agent", TILE_USER_AGENT)
+                setRequestProperty("Referer", TILE_REFERER)
+            }
+
+            // OSM serves "Access blocked" placeholder tiles with HTTP 200 plus an x-blocked
+            // header. Without this check the placeholder image gets decoded and written to the
+            // disk cache, so the map stays covered in block notices even after the cause is fixed.
+            val blockedHeader = connection.getHeaderField("x-blocked")
+            if (!blockedHeader.isNullOrBlank()) {
+                return@withContext null
             }
 
             if (connection.responseCode == HttpURLConnection.HTTP_OK) {
                 connection.inputStream.use { stream ->
                     val bytes = stream.readBytes()
+
+                    // Tiny payloads are also never real 256x256 map tiles.
+                    if (bytes.size < 1024) {
+                        return@withContext null
+                    }
+
                     val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                     if (bmp != null) {
                         memoryCache.put(cacheKey, bmp)
@@ -201,6 +228,22 @@ class TileManager(private val context: Context) {
         }
         canvas.drawText("Z${tile.zoom}: ${tile.x}/${tile.y}", 20f, 40f, textPaint)
         return bmp
+    }
+
+    /**
+     * Wipes the on-disk tile cache for one source (or all sources when [sourceId] is null).
+     * Needed after a provider starts returning "blocked"/placeholder tiles, because those were
+     * previously written to disk and would otherwise be served from cache forever.
+     */
+    fun clearDiskCache(sourceId: String? = null) {
+        try {
+            val target = if (sourceId == null) baseCacheDir else File(baseCacheDir, sourceId)
+            if (target.exists()) {
+                target.deleteRecursively()
+            }
+            baseCacheDir.mkdirs()
+            clearMemoryCache()
+        } catch (_: Exception) {}
     }
 
     fun clearMemoryCache() {
