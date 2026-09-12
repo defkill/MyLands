@@ -16,7 +16,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [36])
+@Config(sdk = [33])
 class MbtilesOfflineMapTest {
 
     @Test
