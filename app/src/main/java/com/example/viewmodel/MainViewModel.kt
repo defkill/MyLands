@@ -437,8 +437,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (state.selectedWaypoints.size >= 2) {
             viewModelScope.launch(Dispatchers.IO) {
                 repository.createRouteFromWaypoints(state.routeName, state.selectedWaypoints)
-                _routeBuilderState.value = RouteBuilderState(isActive = false)
+                // Keep the builder panel open and clear only the current selection, so the
+                // freshly saved route shows up in the saved-routes list right below.
+                _routeBuilderState.value = RouteBuilderState(
+                    isActive = true,
+                    routeName = "Маршрут ${System.currentTimeMillis() % 10000}"
+                )
             }
+        }
+    }
+
+    /**
+     * Loads a previously saved route back into the builder (and therefore back onto the map)
+     * by resolving its stored waypoint ids against the current waypoint list.
+     */
+    fun loadRouteIntoBuilder(route: RouteEntity) {
+        viewModelScope.launch {
+            val all = waypoints.value
+            val ordered = route.parseWaypointIds().mapNotNull { id -> all.firstOrNull { it.id == id } }
+            if (ordered.size < 2) return@launch
+
+            val legs = mutableListOf<RouteLeg>()
+            var totalDist = 0.0
+            for (i in 0 until ordered.size - 1) {
+                val leg = RouteLeg.create(i + 1, ordered[i], ordered[i + 1])
+                legs.add(leg)
+                totalDist += leg.distanceMeters
+            }
+
+            _routeBuilderState.value = RouteBuilderState(
+                isActive = true,
+                routeName = route.name,
+                selectedWaypoints = ordered,
+                legs = legs,
+                totalDistanceMeters = totalDist
+            )
         }
     }
 
