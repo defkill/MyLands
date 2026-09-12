@@ -6,14 +6,13 @@ import com.example.geodesy.GeodesyEngine
 import java.util.Locale
 
 /**
- * Explicit active map tool mode as requested:
- * NONE, PLACE_WAYPOINT_PENDING, RULER, INTERSECTION.
+ * Explicit active map tool mode:
+ * NONE, PLACE_WAYPOINT_PENDING, RULER.
  */
 enum class ActiveMapTool {
     NONE,
     PLACE_WAYPOINT_PENDING,
-    RULER,
-    INTERSECTION
+    RULER
 }
 
 /**
@@ -59,18 +58,6 @@ data class RulerState(
         return AngleUnit.format(reverseAzimuthDeg, unit)
     }
 }
-
-/**
- * State of 2-ray azimuth intersection tool (засечка по двум направлениям).
- */
-data class IntersectionToolState(
-    val isActive: Boolean = false,
-    val point1: GeoPoint? = null,
-    val azimuth1Deg: Double = 0.0,
-    val point2: GeoPoint? = null,
-    val azimuth2Deg: Double = 0.0,
-    val result: IntersectionResult? = null
-)
 
 /**
  * State of interactive route builder by points.
