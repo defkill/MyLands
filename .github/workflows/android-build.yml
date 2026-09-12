@@ -43,7 +43,6 @@ jobs:
       - name: Generate Debug Keystore
         run: |
           keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
-          mv debug.keystore app/
 
       - name: Lint with Gradle
         run: ./gradlew lint --continue
