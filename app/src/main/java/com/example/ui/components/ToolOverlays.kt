@@ -1,8 +1,10 @@
 package com.example.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -17,6 +19,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.entity.RouteEntity
 import com.example.data.entity.WaypointEntity
 import com.example.model.*
 import java.util.Locale
@@ -123,9 +126,11 @@ fun RulerOverlay(
 fun RouteBuilderPanel(
     routeState: RouteBuilderState,
     allWaypoints: List<WaypointEntity>,
+    savedRoutes: List<RouteEntity>,
     angleUnit: AngleUnit,
     onToggleWaypoint: (WaypointEntity) -> Unit,
     onSaveRoute: () -> Unit,
+    onLoadRoute: (RouteEntity) -> Unit,
     onCancel: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -201,15 +206,78 @@ fun RouteBuilderPanel(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Horizontal chips of available waypoints to add
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                allWaypoints.take(5).forEach { wp ->
+            // Scrollable chips of ALL available waypoints. Included points are highlighted
+            // green so it is obvious at a glance which ones are part of the route.
+            LazyRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                items(allWaypoints) { wp ->
                     val isIncluded = routeState.selectedWaypoints.any { it.id == wp.id }
+                    val orderIndex = routeState.selectedWaypoints.indexOfFirst { it.id == wp.id }
                     FilterChip(
                         selected = isIncluded,
                         onClick = { onToggleWaypoint(wp) },
-                        label = { Text(wp.name, maxLines = 1) }
+                        label = {
+                            Text(
+                                text = if (isIncluded) "${orderIndex + 1}. ${wp.name}" else wp.name,
+                                maxLines = 1,
+                                fontWeight = if (isIncluded) FontWeight.Bold else FontWeight.Normal
+                            )
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Color(0xFF2E7D32),
+                            selectedLabelColor = Color(0xFFB9F6CA),
+                            containerColor = Color(0xFF1E2836),
+                            labelColor = Color(0xFFB0BEC5)
+                        )
                     )
+                }
+            }
+
+            // Previously saved routes, listed right below the buttons so a saved route
+            // is immediately visible instead of silently disappearing into the database.
+            if (savedRoutes.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "СОХРАНЁННЫЕ МАРШРУТЫ (${savedRoutes.size})",
+                    color = Color(0xFF90A4AE),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    items(savedRoutes) { route ->
+                        Surface(
+                            color = Color(0xFF1B3A2A),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.clickable { onLoadRoute(route) }
+                        ) {
+                            Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+                                Text(
+                                    text = route.name,
+                                    color = Color(0xFFB9F6CA),
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1
+                                )
+                                Text(
+                                    text = String.format(
+                                        java.util.Locale.US,
+                                        "%.2f км · %d точек",
+                                        route.totalDistanceMeters / 1000.0,
+                                        route.parseWaypointIds().size
+                                    ),
+                                    color = Color(0xFF81C784),
+                                    fontSize = 11.sp,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                        }
+                    }
                 }
             }
 
