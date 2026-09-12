@@ -18,9 +18,11 @@ import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
+import com.example.data.entity.RouteEntity
 import com.example.data.entity.RouteLeg
 import com.example.data.entity.TrackPointEntity
 import com.example.data.entity.WaypointEntity
+import com.example.geodesy.GeodesyEngine
 import com.example.map.MapProjection
 import com.example.map.TileCoordinate
 import com.example.map.TileManager
@@ -49,6 +51,7 @@ fun TacticalMapView(
     rulerState: RulerState,
     onRulerPointChanged: (GeoPoint, GeoPoint) -> Unit,
     routeBuilderState: RouteBuilderState,
+    savedRoutes: List<RouteEntity> = emptyList(),
     activeTrackPoints: List<TrackPointEntity>,
     angleUnit: AngleUnit,
     modifier: Modifier = Modifier
@@ -58,6 +61,32 @@ fun TacticalMapView(
 
     // Redraw trigger when tiles finish loading asynchronously
     var tileRefreshTrigger by remember { mutableStateOf(0) }
+
+    // Tracks tiles currently being fetched so we don't spawn duplicate requests
+    // for the same tile on every recomposition/frame.
+    val inFlightTiles = remember { mutableSetOf<String>() }
+
+    // Requests an async load of a tile that isn't in cache yet. Called from the draw phase,
+    // so it must not block: it launches into the composition scope and bumps a refresh
+    // trigger when the bitmap lands, which re-runs the Canvas draw.
+    val requestTile: (TileSource, TileCoordinate) -> Unit = remember(tileManager) {
+        { source, tile ->
+            val key = "${source.id}/${tile.key}"
+            if (inFlightTiles.add(key)) {
+                coroutineScope.launch {
+                    try {
+                        val bmp = tileManager.getTileBitmap(source, tile)
+                        if (bmp != null) {
+                            tileRefreshTrigger++
+                        }
+                    } catch (_: Exception) {
+                    } finally {
+                        inFlightTiles.remove(key)
+                    }
+                }
+            }
+        }
+    }
 
     // IMPORTANT (gesture stability):
     // pointerInput() restarts its block whenever a key changes. Using `center`/`zoom` as keys
@@ -148,6 +177,11 @@ fun TacticalMapView(
         val height = size.height
         canvasSize = Pair(width, height)
 
+        // Reading the trigger inside the draw scope makes this Canvas redraw
+        // whenever an async tile finishes loading.
+        @Suppress("UNUSED_EXPRESSION")
+        tileRefreshTrigger
+
         // 1. Draw Map Tiles
         drawTiles(
             center = center,
@@ -156,9 +190,7 @@ fun TacticalMapView(
             height = height,
             tileSource = tileSource,
             tileManager = tileManager,
-            onTileLoaded = {
-                tileRefreshTrigger++
-            }
+            onRequestTile = requestTile
         )
 
         // 2. Draw Military Grid Overlay
@@ -167,7 +199,10 @@ fun TacticalMapView(
         // 3. Draw Recorded Tracks
         drawTrackPoints(activeTrackPoints, center, zoom, width, height)
 
-        // 4. Draw Route Builder Polylines & Legs
+        // 4a. Draw all saved routes (persisted polylines)
+        drawSavedRoutes(savedRoutes, waypoints, center, zoom, width, height)
+
+        // 4b. Draw Route Builder Polylines & Legs (currently being edited)
         drawRouteBuilder(routeBuilderState, center, zoom, width, height, angleUnit)
 
         // 6. Draw Ruler
@@ -176,7 +211,7 @@ fun TacticalMapView(
         }
 
         // 7. Draw Waypoints
-        drawWaypoints(waypoints, selectedWaypoint, center, zoom, width, height)
+        drawWaypoints(waypoints, selectedWaypoint, center, zoom, width, height, userLocation, angleUnit)
 
         // 7b. Draw Candidate Point & Targeting Vector
         val activeTarget = candidatePoint ?: selectedWaypoint?.toGeoPoint()
@@ -204,7 +239,7 @@ private fun DrawScope.drawTiles(
     height: Float,
     tileSource: TileSource,
     tileManager: TileManager,
-    onTileLoaded: () -> Unit
+    onRequestTile: (TileSource, TileCoordinate) -> Unit
 ) {
     val intZoom = zoom.toInt().coerceIn(tileSource.minZoom, tileSource.maxZoom)
     val scale = 2.0.pow(zoom - intZoom).toFloat()
@@ -250,7 +285,7 @@ private fun DrawScope.drawTiles(
                     null
                 )
             } else {
-                // Draw fallback dark grid tile and request load
+                // Draw fallback dark grid tile and request an async load of the real one
                 drawContext.canvas.nativeCanvas.drawBitmap(
                     tileManager.createGridFallbackTile(tile),
                     null,
@@ -262,6 +297,7 @@ private fun DrawScope.drawTiles(
                     ),
                     null
                 )
+                onRequestTile(tileSource, tile)
             }
         }
     }
@@ -354,6 +390,40 @@ private fun DrawScope.drawTrackPoints(
     }
 }
 
+private fun DrawScope.drawSavedRoutes(
+    savedRoutes: List<RouteEntity>,
+    waypoints: List<WaypointEntity>,
+    center: GeoPoint,
+    zoom: Double,
+    width: Float,
+    height: Float
+) {
+    if (savedRoutes.isEmpty() || waypoints.isEmpty()) return
+
+    val byId = waypoints.associateBy { it.id }
+    val routeColor = Color(0xFF26C6DA)
+
+    savedRoutes.forEach { route ->
+        val pts = route.parseWaypointIds().mapNotNull { byId[it] }
+        if (pts.size < 2) return@forEach
+
+        for (i in 0 until pts.size - 1) {
+            val (ax, ay) = MapProjection.geoToScreen(
+                pts[i].toGeoPoint(), center.latitude, center.longitude, zoom, width, height
+            )
+            val (bx, by) = MapProjection.geoToScreen(
+                pts[i + 1].toGeoPoint(), center.latitude, center.longitude, zoom, width, height
+            )
+            drawLine(
+                color = routeColor,
+                start = Offset(ax, ay),
+                end = Offset(bx, by),
+                strokeWidth = 5f
+            )
+        }
+    }
+}
+
 private fun DrawScope.drawRouteBuilder(
     routeState: RouteBuilderState,
     center: GeoPoint,
@@ -443,11 +513,22 @@ private fun DrawScope.drawWaypoints(
     center: GeoPoint,
     zoom: Double,
     width: Float,
-    height: Float
+    height: Float,
+    userLocation: GeoPoint?,
+    angleUnit: AngleUnit
 ) {
     val textPaint = AndroidPaint().apply {
         color = android.graphics.Color.WHITE
         textSize = 28f
+        isAntiAlias = true
+        setShadowLayer(4f, 0f, 0f, android.graphics.Color.BLACK)
+    }
+
+    // Azimuth / distance readout shown under every waypoint, measured from the user's
+    // current position, so multiple points can be compared at a glance while moving.
+    val navPaint = AndroidPaint().apply {
+        color = android.graphics.Color.rgb(129, 212, 250)
+        textSize = 24f
         isAntiAlias = true
         setShadowLayer(4f, 0f, 0f, android.graphics.Color.BLACK)
     }
@@ -467,6 +548,20 @@ private fun DrawScope.drawWaypoints(
         }
 
         drawContext.canvas.nativeCanvas.drawText(wp.name, sx + 16f, sy + 10f, textPaint)
+
+        if (userLocation != null) {
+            val target = wp.toGeoPoint()
+            val distM = GeodesyEngine.distanceMeters(userLocation, target)
+            val azDeg = GeodesyEngine.azimuthDegrees(userLocation, target)
+
+            val distStr = if (distM >= 1000.0) {
+                String.format(java.util.Locale.US, "%.2f км", distM / 1000.0)
+            } else {
+                String.format(java.util.Locale.US, "%.0f м", distM)
+            }
+            val label = "${AngleUnit.format(azDeg, angleUnit)} · $distStr"
+            drawContext.canvas.nativeCanvas.drawText(label, sx + 16f, sy + 38f, navPaint)
+        }
     }
 }
 
