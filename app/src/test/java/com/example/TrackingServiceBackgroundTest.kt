@@ -26,7 +26,7 @@ import java.util.Date
 import java.util.Locale
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [36])
+@Config(sdk = [33])
 class TrackingServiceBackgroundTest {
 
     @Test
