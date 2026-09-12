@@ -18,7 +18,7 @@ import org.robolectric.annotation.Config
 import kotlin.math.abs
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [36])
+@Config(sdk = [33])
 class PdrAdaptiveBatchingTest {
 
     @Test
