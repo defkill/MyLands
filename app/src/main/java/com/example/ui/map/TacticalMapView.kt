@@ -21,7 +21,6 @@ import androidx.compose.ui.platform.testTag
 import com.example.data.entity.RouteLeg
 import com.example.data.entity.TrackPointEntity
 import com.example.data.entity.WaypointEntity
-import com.example.geodesy.GeodesyEngine
 import com.example.map.MapProjection
 import com.example.map.TileCoordinate
 import com.example.map.TileManager
@@ -50,7 +49,6 @@ fun TacticalMapView(
     rulerState: RulerState,
     onRulerPointChanged: (GeoPoint, GeoPoint) -> Unit,
     routeBuilderState: RouteBuilderState,
-    intersectionState: IntersectionToolState,
     activeTrackPoints: List<TrackPointEntity>,
     angleUnit: AngleUnit,
     modifier: Modifier = Modifier
@@ -61,41 +59,55 @@ fun TacticalMapView(
     // Redraw trigger when tiles finish loading asynchronously
     var tileRefreshTrigger by remember { mutableStateOf(0) }
 
+    // IMPORTANT (gesture stability):
+    // pointerInput() restarts its block whenever a key changes. Using `center`/`zoom` as keys
+    // restarted the handler on every frame of a drag (pan changes center -> key changes ->
+    // gesture aborted mid-drag), which made the map "stick" after moving a few pixels.
+    // Keys are now stable (Unit) and the latest values are read through rememberUpdatedState,
+    // so the lambda always sees fresh state without being torn down.
+    val currentCenter by rememberUpdatedState(center)
+    val currentZoom by rememberUpdatedState(zoom)
+    val currentTool by rememberUpdatedState(activeMapTool)
+    val currentRulerState by rememberUpdatedState(rulerState)
+    val currentWaypoints by rememberUpdatedState(waypoints)
+    val onCenterChangedState by rememberUpdatedState(onCenterChanged)
+    val onZoomChangedState by rememberUpdatedState(onZoomChanged)
+    val onMapTappedState by rememberUpdatedState(onMapTapped)
+    val onWaypointSelectedState by rememberUpdatedState(onWaypointSelected)
+    val onRulerPointChangedState by rememberUpdatedState(onRulerPointChanged)
+
     Canvas(
         modifier = modifier
             .fillMaxSize()
             .testTag("tactical_map_canvas")
-            .pointerInput(activeMapTool, rulerState.isActive, intersectionState.isActive) {
+            .pointerInput(Unit) {
                 detectTapGestures { offset ->
                     val tappedGeo = MapProjection.screenToGeo(
                         screenX = offset.x,
                         screenY = offset.y,
-                        centerLat = center.latitude,
-                        centerLon = center.longitude,
-                        zoom = zoom,
+                        centerLat = currentCenter.latitude,
+                        centerLon = currentCenter.longitude,
+                        zoom = currentZoom,
                         screenWidth = size.width.toFloat(),
                         screenHeight = size.height.toFloat()
                     )
 
-                    if (activeMapTool == ActiveMapTool.RULER || rulerState.isActive) {
-                        if (rulerState.startPoint == null || rulerState.startPoint == rulerState.endPoint) {
-                            onRulerPointChanged(rulerState.startPoint ?: tappedGeo, tappedGeo)
+                    if (currentTool == ActiveMapTool.RULER || currentRulerState.isActive) {
+                        val rs = currentRulerState
+                        if (rs.startPoint == null || rs.startPoint == rs.endPoint) {
+                            onRulerPointChangedState(rs.startPoint ?: tappedGeo, tappedGeo)
                         } else {
-                            onRulerPointChanged(tappedGeo, tappedGeo)
+                            onRulerPointChangedState(tappedGeo, tappedGeo)
                         }
                         return@detectTapGestures
                     }
 
-                    if (activeMapTool == ActiveMapTool.INTERSECTION || intersectionState.isActive) {
-                        return@detectTapGestures
-                    }
-
                     // Check if a waypoint was tapped
-                    val clickedWp = waypoints.firstOrNull { wp ->
+                    val clickedWp = currentWaypoints.firstOrNull { wp ->
                         val (sx, sy) = MapProjection.geoToScreen(
                             wp.toGeoPoint(),
-                            center.latitude, center.longitude,
-                            zoom, size.width.toFloat(), size.height.toFloat()
+                            currentCenter.latitude, currentCenter.longitude,
+                            currentZoom, size.width.toFloat(), size.height.toFloat()
                         )
                         val dx = sx - offset.x
                         val dy = sy - offset.y
@@ -103,29 +115,31 @@ fun TacticalMapView(
                     }
 
                     if (clickedWp != null) {
-                        onWaypointSelected(clickedWp)
+                        onWaypointSelectedState(clickedWp)
                     } else {
-                        onMapTapped(tappedGeo)
+                        onMapTappedState(tappedGeo)
                     }
                 }
             }
-            .pointerInput(center, zoom) {
+            .pointerInput(Unit) {
                 detectTransformGestures { _, pan, gestureZoom, _ ->
                     if (gestureZoom != 1.0f) {
-                        val newZoom = (zoom + ln(gestureZoom.toDouble()) / ln(1.5)).coerceIn(2.0, 19.0)
-                        onZoomChanged(newZoom)
+                        val newZoom = (currentZoom + ln(gestureZoom.toDouble()) / ln(1.5))
+                            .coerceIn(2.0, 19.0)
+                        onZoomChangedState(newZoom)
                     }
 
                     if (pan.x != 0f || pan.y != 0f) {
-                        val currentWorldX = MapProjection.lonToWorldX(center.longitude, zoom)
-                        val currentWorldY = MapProjection.latToWorldY(center.latitude, zoom)
+                        val z = currentZoom
+                        val currentWorldX = MapProjection.lonToWorldX(currentCenter.longitude, z)
+                        val currentWorldY = MapProjection.latToWorldY(currentCenter.latitude, z)
 
                         val newWorldX = currentWorldX - pan.x
                         val newWorldY = currentWorldY - pan.y
 
-                        val newLon = MapProjection.worldXToLon(newWorldX, zoom)
-                        val newLat = MapProjection.worldYToLat(newWorldY, zoom)
-                        onCenterChanged(GeoPoint(newLat, newLon))
+                        val newLon = MapProjection.worldXToLon(newWorldX, z)
+                        val newLat = MapProjection.worldYToLat(newWorldY, z)
+                        onCenterChangedState(GeoPoint(newLat, newLon))
                     }
                 }
             }
@@ -155,11 +169,6 @@ fun TacticalMapView(
 
         // 4. Draw Route Builder Polylines & Legs
         drawRouteBuilder(routeBuilderState, center, zoom, width, height, angleUnit)
-
-        // 5. Draw 2-Ray Intersection Lines
-        if (intersectionState.isActive) {
-            drawIntersectionRays(intersectionState, center, zoom, width, height)
-        }
 
         // 6. Draw Ruler
         if (rulerState.isActive && rulerState.startPoint != null && rulerState.endPoint != null) {
@@ -385,62 +394,6 @@ private fun DrawScope.drawRouteBuilder(
         val label = "#${leg.index}: $distStr | $azStr"
 
         drawContext.canvas.nativeCanvas.drawText(label, midX - 60f, midY - 12f, paint)
-    }
-}
-
-private fun DrawScope.drawIntersectionRays(
-    state: IntersectionToolState,
-    center: GeoPoint,
-    zoom: Double,
-    width: Float,
-    height: Float
-) {
-    val rayColor1 = Color(0xFFFFEB3B) // Yellow ray 1
-    val rayColor2 = Color(0xFFFF7043) // Coral ray 2
-
-    val p1 = state.point1
-    val p2 = state.point2
-
-    if (p1 != null) {
-        val (s1x, s1y) = MapProjection.geoToScreen(p1, center.latitude, center.longitude, zoom, width, height)
-        drawCircle(rayColor1, radius = 10f, center = Offset(s1x, s1y))
-
-        // Draw ray line
-        val farPoint1 = GeodesyEngine.destinationPoint(p1, 25000.0, state.azimuth1Deg)
-        val (e1x, e1y) = MapProjection.geoToScreen(farPoint1, center.latitude, center.longitude, zoom, width, height)
-        drawLine(
-            color = rayColor1,
-            start = Offset(s1x, s1y),
-            end = Offset(e1x, e1y),
-            strokeWidth = 4f,
-            pathEffect = PathEffect.dashPathEffect(floatArrayOf(15f, 10f), 0f)
-        )
-    }
-
-    if (p2 != null) {
-        val (s2x, s2y) = MapProjection.geoToScreen(p2, center.latitude, center.longitude, zoom, width, height)
-        drawCircle(rayColor2, radius = 10f, center = Offset(s2x, s2y))
-
-        val farPoint2 = GeodesyEngine.destinationPoint(p2, 25000.0, state.azimuth2Deg)
-        val (e2x, e2y) = MapProjection.geoToScreen(farPoint2, center.latitude, center.longitude, zoom, width, height)
-        drawLine(
-            color = rayColor2,
-            start = Offset(s2x, s2y),
-            end = Offset(e2x, e2y),
-            strokeWidth = 4f,
-            pathEffect = PathEffect.dashPathEffect(floatArrayOf(15f, 10f), 0f)
-        )
-    }
-
-    // Target intersection point
-    if (state.result is IntersectionResult.Success) {
-        val inter = state.result.intersectionPoint
-        val (ix, iy) = MapProjection.geoToScreen(inter, center.latitude, center.longitude, zoom, width, height)
-
-        // Draw tactical crosshair on target
-        drawCircle(Color.Red, radius = 16f, center = Offset(ix, iy), style = Stroke(width = 4f))
-        drawLine(Color.Red, Offset(ix - 24f, iy), Offset(ix + 24f, iy), strokeWidth = 3f)
-        drawLine(Color.Red, Offset(ix, iy - 24f), Offset(ix, iy + 24f), strokeWidth = 3f)
     }
 }
 
