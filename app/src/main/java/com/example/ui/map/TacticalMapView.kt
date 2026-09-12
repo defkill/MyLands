@@ -1,0 +1,631 @@
+package com.example.ui.map
+
+import android.graphics.Bitmap
+import android.graphics.Paint as AndroidPaint
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.testTag
+import com.example.data.entity.RouteLeg
+import com.example.data.entity.TrackPointEntity
+import com.example.data.entity.WaypointEntity
+import com.example.geodesy.GeodesyEngine
+import com.example.map.MapProjection
+import com.example.map.TileCoordinate
+import com.example.map.TileManager
+import com.example.map.TileSource
+import com.example.model.*
+import com.example.sensor.OrientationData
+import kotlinx.coroutines.launch
+import kotlin.math.*
+
+@Composable
+fun TacticalMapView(
+    center: GeoPoint,
+    zoom: Double,
+    onCenterChanged: (GeoPoint) -> Unit,
+    onZoomChanged: (Double) -> Unit,
+    userLocation: GeoPoint?,
+    orientationData: OrientationData,
+    tileSource: TileSource,
+    tileManager: TileManager,
+    waypoints: List<WaypointEntity>,
+    selectedWaypoint: WaypointEntity?,
+    onWaypointSelected: (WaypointEntity?) -> Unit,
+    candidatePoint: GeoPoint? = null,
+    activeMapTool: ActiveMapTool = ActiveMapTool.NONE,
+    onMapTapped: (GeoPoint) -> Unit,
+    rulerState: RulerState,
+    onRulerPointChanged: (GeoPoint, GeoPoint) -> Unit,
+    routeBuilderState: RouteBuilderState,
+    intersectionState: IntersectionToolState,
+    activeTrackPoints: List<TrackPointEntity>,
+    angleUnit: AngleUnit,
+    modifier: Modifier = Modifier
+) {
+    val coroutineScope = rememberCoroutineScope()
+    var canvasSize by remember { mutableStateOf(Pair(1080f, 1920f)) }
+
+    // Redraw trigger when tiles finish loading asynchronously
+    var tileRefreshTrigger by remember { mutableStateOf(0) }
+
+    Canvas(
+        modifier = modifier
+            .fillMaxSize()
+            .testTag("tactical_map_canvas")
+            .pointerInput(activeMapTool, rulerState.isActive, intersectionState.isActive) {
+                detectTapGestures { offset ->
+                    val tappedGeo = MapProjection.screenToGeo(
+                        screenX = offset.x,
+                        screenY = offset.y,
+                        centerLat = center.latitude,
+                        centerLon = center.longitude,
+                        zoom = zoom,
+                        screenWidth = size.width.toFloat(),
+                        screenHeight = size.height.toFloat()
+                    )
+
+                    if (activeMapTool == ActiveMapTool.RULER || rulerState.isActive) {
+                        if (rulerState.startPoint == null || rulerState.startPoint == rulerState.endPoint) {
+                            onRulerPointChanged(rulerState.startPoint ?: tappedGeo, tappedGeo)
+                        } else {
+                            onRulerPointChanged(tappedGeo, tappedGeo)
+                        }
+                        return@detectTapGestures
+                    }
+
+                    if (activeMapTool == ActiveMapTool.INTERSECTION || intersectionState.isActive) {
+                        return@detectTapGestures
+                    }
+
+                    // Check if a waypoint was tapped
+                    val clickedWp = waypoints.firstOrNull { wp ->
+                        val (sx, sy) = MapProjection.geoToScreen(
+                            wp.toGeoPoint(),
+                            center.latitude, center.longitude,
+                            zoom, size.width.toFloat(), size.height.toFloat()
+                        )
+                        val dx = sx - offset.x
+                        val dy = sy - offset.y
+                        dx * dx + dy * dy < 1600f // 40px radius
+                    }
+
+                    if (clickedWp != null) {
+                        onWaypointSelected(clickedWp)
+                    } else {
+                        onMapTapped(tappedGeo)
+                    }
+                }
+            }
+            .pointerInput(center, zoom) {
+                detectTransformGestures { _, pan, gestureZoom, _ ->
+                    if (gestureZoom != 1.0f) {
+                        val newZoom = (zoom + ln(gestureZoom.toDouble()) / ln(1.5)).coerceIn(2.0, 19.0)
+                        onZoomChanged(newZoom)
+                    }
+
+                    if (pan.x != 0f || pan.y != 0f) {
+                        val currentWorldX = MapProjection.lonToWorldX(center.longitude, zoom)
+                        val currentWorldY = MapProjection.latToWorldY(center.latitude, zoom)
+
+                        val newWorldX = currentWorldX - pan.x
+                        val newWorldY = currentWorldY - pan.y
+
+                        val newLon = MapProjection.worldXToLon(newWorldX, zoom)
+                        val newLat = MapProjection.worldYToLat(newWorldY, zoom)
+                        onCenterChanged(GeoPoint(newLat, newLon))
+                    }
+                }
+            }
+    ) {
+        val width = size.width
+        val height = size.height
+        canvasSize = Pair(width, height)
+
+        // 1. Draw Map Tiles
+        drawTiles(
+            center = center,
+            zoom = zoom,
+            width = width,
+            height = height,
+            tileSource = tileSource,
+            tileManager = tileManager,
+            onTileLoaded = {
+                tileRefreshTrigger++
+            }
+        )
+
+        // 2. Draw Military Grid Overlay
+        drawMilitaryGrid(center, zoom, width, height)
+
+        // 3. Draw Recorded Tracks
+        drawTrackPoints(activeTrackPoints, center, zoom, width, height)
+
+        // 4. Draw Route Builder Polylines & Legs
+        drawRouteBuilder(routeBuilderState, center, zoom, width, height, angleUnit)
+
+        // 5. Draw 2-Ray Intersection Lines
+        if (intersectionState.isActive) {
+            drawIntersectionRays(intersectionState, center, zoom, width, height)
+        }
+
+        // 6. Draw Ruler
+        if (rulerState.isActive && rulerState.startPoint != null && rulerState.endPoint != null) {
+            drawRuler(rulerState, center, zoom, width, height, angleUnit)
+        }
+
+        // 7. Draw Waypoints
+        drawWaypoints(waypoints, selectedWaypoint, center, zoom, width, height)
+
+        // 7b. Draw Candidate Point & Targeting Vector
+        val activeTarget = candidatePoint ?: selectedWaypoint?.toGeoPoint()
+        if (activeTarget != null && userLocation != null) {
+            drawTargetBearingLine(userLocation, activeTarget, center, zoom, width, height)
+        }
+        if (candidatePoint != null) {
+            drawCandidatePoint(candidatePoint, center, zoom, width, height)
+        }
+
+        // 8. Draw User Location Puck and Heading
+        if (userLocation != null) {
+            drawUserLocation(userLocation, orientationData, center, zoom, width, height)
+        }
+
+        // 9. Draw Center Crosshair
+        drawCrosshair(width, height)
+    }
+}
+
+private fun DrawScope.drawTiles(
+    center: GeoPoint,
+    zoom: Double,
+    width: Float,
+    height: Float,
+    tileSource: TileSource,
+    tileManager: TileManager,
+    onTileLoaded: () -> Unit
+) {
+    val intZoom = zoom.toInt().coerceIn(tileSource.minZoom, tileSource.maxZoom)
+    val scale = 2.0.pow(zoom - intZoom).toFloat()
+
+    val centerWorldX = MapProjection.lonToWorldX(center.longitude, intZoom.toDouble())
+    val centerWorldY = MapProjection.latToWorldY(center.latitude, intZoom.toDouble())
+
+    val halfW = (width / 2f) / scale
+    val halfH = (height / 2f) / scale
+
+    val minWorldX = centerWorldX - halfW
+    val maxWorldX = centerWorldX + halfW
+    val minWorldY = centerWorldY - halfH
+    val maxWorldY = centerWorldY + halfH
+
+    val minTileX = (minWorldX / 256.0).toInt().coerceAtLeast(0)
+    val maxTileX = (maxWorldX / 256.0).toInt().coerceAtMost((2.0.pow(intZoom) - 1).toInt())
+    val minTileY = (minWorldY / 256.0).toInt().coerceAtLeast(0)
+    val maxTileY = (maxWorldY / 256.0).toInt().coerceAtMost((2.0.pow(intZoom) - 1).toInt())
+
+    val maxTiles = 2.0.pow(intZoom).toInt()
+
+    for (tx in minTileX..maxTileX) {
+        val wrappedTx = (tx % maxTiles + maxTiles) % maxTiles
+        for (ty in minTileY..maxTileY) {
+            val tile = TileCoordinate(wrappedTx, ty, intZoom)
+
+            val screenTileX = width / 2f + (tx * 256.0 - centerWorldX).toFloat() * scale
+            val screenTileY = height / 2f + (ty * 256.0 - centerWorldY).toFloat() * scale
+            val tileDisplaySize = 256f * scale
+
+            val cachedBmp = tileManager.getCachedBitmap(tileSource.id, tile)
+            if (cachedBmp != null) {
+                drawContext.canvas.nativeCanvas.drawBitmap(
+                    cachedBmp,
+                    null,
+                    android.graphics.RectF(
+                        screenTileX,
+                        screenTileY,
+                        screenTileX + tileDisplaySize,
+                        screenTileY + tileDisplaySize
+                    ),
+                    null
+                )
+            } else {
+                // Draw fallback dark grid tile and request load
+                drawContext.canvas.nativeCanvas.drawBitmap(
+                    tileManager.createGridFallbackTile(tile),
+                    null,
+                    android.graphics.RectF(
+                        screenTileX,
+                        screenTileY,
+                        screenTileX + tileDisplaySize,
+                        screenTileY + tileDisplaySize
+                    ),
+                    null
+                )
+            }
+        }
+    }
+}
+
+private fun DrawScope.drawMilitaryGrid(center: GeoPoint, zoom: Double, width: Float, height: Float) {
+    if (zoom < 10.0) return
+
+    val gridStepDeg = if (zoom >= 15.0) 0.01 else if (zoom >= 13.0) 0.05 else 0.1
+    val startLat = (center.latitude / gridStepDeg).toInt() * gridStepDeg - gridStepDeg * 4
+    val endLat = startLat + gridStepDeg * 8
+
+    val startLon = (center.longitude / gridStepDeg).toInt() * gridStepDeg - gridStepDeg * 4
+    val endLon = startLon + gridStepDeg * 8
+
+    val gridColor = Color(0x334CAF50) // Tactical translucent green
+    val textColor = Color(0x8881C784)
+
+    val paint = AndroidPaint().apply {
+        color = android.graphics.Color.argb(140, 129, 199, 132)
+        textSize = 28f
+        isAntiAlias = true
+    }
+
+    var lat = startLat
+    while (lat <= endLat) {
+        val (sx1, sy1) = MapProjection.geoToScreen(GeoPoint(lat, center.longitude - 1.0), center.latitude, center.longitude, zoom, width, height)
+        val (sx2, sy2) = MapProjection.geoToScreen(GeoPoint(lat, center.longitude + 1.0), center.latitude, center.longitude, zoom, width, height)
+        drawLine(gridColor, Offset(0f, sy1), Offset(width, sy1), strokeWidth = 1f)
+
+        if (sy1 in 30f..(height - 30f)) {
+            drawContext.canvas.nativeCanvas.drawText(
+                String.format(java.util.Locale.US, "%.3f°", lat),
+                16f,
+                sy1 - 6f,
+                paint
+            )
+        }
+        lat += gridStepDeg
+    }
+
+    var lon = startLon
+    while (lon <= endLon) {
+        val (sx1, _) = MapProjection.geoToScreen(GeoPoint(center.latitude, lon), center.latitude, center.longitude, zoom, width, height)
+        drawLine(gridColor, Offset(sx1, 0f), Offset(sx1, height), strokeWidth = 1f)
+
+        if (sx1 in 60f..(width - 60f)) {
+            drawContext.canvas.nativeCanvas.drawText(
+                String.format(java.util.Locale.US, "%.3f°", lon),
+                sx1 + 6f,
+                height - 20f,
+                paint
+            )
+        }
+        lon += gridStepDeg
+    }
+}
+
+private fun DrawScope.drawTrackPoints(
+    points: List<TrackPointEntity>,
+    center: GeoPoint,
+    zoom: Double,
+    width: Float,
+    height: Float
+) {
+    if (points.size < 2) return
+
+    val gpsColor = Color(0xFF4CAF50)
+    val drColor = Color(0xFFFF9800)
+    val drPathEffect = PathEffect.dashPathEffect(floatArrayOf(20f, 15f), 0f)
+
+    for (i in 0 until points.size - 1) {
+        val p1 = points[i]
+        val p2 = points[i + 1]
+
+        val (s1x, s1y) = MapProjection.geoToScreen(p1.toGeoPoint(), center.latitude, center.longitude, zoom, width, height)
+        val (s2x, s2y) = MapProjection.geoToScreen(p2.toGeoPoint(), center.latitude, center.longitude, zoom, width, height)
+
+        val isDr = p2.source == TrackPointEntity.SOURCE_DEAD_RECKONING
+        val color = if (isDr) drColor else gpsColor
+        val effect = if (isDr) drPathEffect else null
+
+        drawLine(
+            color = color,
+            start = Offset(s1x, s1y),
+            end = Offset(s2x, s2y),
+            strokeWidth = 6f,
+            pathEffect = effect
+        )
+    }
+}
+
+private fun DrawScope.drawRouteBuilder(
+    routeState: RouteBuilderState,
+    center: GeoPoint,
+    zoom: Double,
+    width: Float,
+    height: Float,
+    angleUnit: AngleUnit
+) {
+    if (!routeState.isActive) return
+
+    val routeColor = Color(0xFF00E5FF) // Cyan
+    val legs = routeState.legs
+
+    val paint = AndroidPaint().apply {
+        color = android.graphics.Color.WHITE
+        textSize = 30f
+        isAntiAlias = true
+        setShadowLayer(4f, 0f, 0f, android.graphics.Color.BLACK)
+    }
+
+    legs.forEach { leg ->
+        val (s1x, s1y) = MapProjection.geoToScreen(leg.fromPoint.toGeoPoint(), center.latitude, center.longitude, zoom, width, height)
+        val (s2x, s2y) = MapProjection.geoToScreen(leg.toPoint.toGeoPoint(), center.latitude, center.longitude, zoom, width, height)
+
+        drawLine(
+            color = routeColor,
+            start = Offset(s1x, s1y),
+            end = Offset(s2x, s2y),
+            strokeWidth = 5f
+        )
+
+        // Midpoint label for distance and azimuth
+        val midX = (s1x + s2x) / 2f
+        val midY = (s1y + s2y) / 2f
+
+        val distStr = leg.formatDistance()
+        val azStr = AngleUnit.format(leg.forwardAzimuthDeg, angleUnit)
+        val label = "#${leg.index}: $distStr | $azStr"
+
+        drawContext.canvas.nativeCanvas.drawText(label, midX - 60f, midY - 12f, paint)
+    }
+}
+
+private fun DrawScope.drawIntersectionRays(
+    state: IntersectionToolState,
+    center: GeoPoint,
+    zoom: Double,
+    width: Float,
+    height: Float
+) {
+    val rayColor1 = Color(0xFFFFEB3B) // Yellow ray 1
+    val rayColor2 = Color(0xFFFF7043) // Coral ray 2
+
+    val p1 = state.point1
+    val p2 = state.point2
+
+    if (p1 != null) {
+        val (s1x, s1y) = MapProjection.geoToScreen(p1, center.latitude, center.longitude, zoom, width, height)
+        drawCircle(rayColor1, radius = 10f, center = Offset(s1x, s1y))
+
+        // Draw ray line
+        val farPoint1 = GeodesyEngine.destinationPoint(p1, 25000.0, state.azimuth1Deg)
+        val (e1x, e1y) = MapProjection.geoToScreen(farPoint1, center.latitude, center.longitude, zoom, width, height)
+        drawLine(
+            color = rayColor1,
+            start = Offset(s1x, s1y),
+            end = Offset(e1x, e1y),
+            strokeWidth = 4f,
+            pathEffect = PathEffect.dashPathEffect(floatArrayOf(15f, 10f), 0f)
+        )
+    }
+
+    if (p2 != null) {
+        val (s2x, s2y) = MapProjection.geoToScreen(p2, center.latitude, center.longitude, zoom, width, height)
+        drawCircle(rayColor2, radius = 10f, center = Offset(s2x, s2y))
+
+        val farPoint2 = GeodesyEngine.destinationPoint(p2, 25000.0, state.azimuth2Deg)
+        val (e2x, e2y) = MapProjection.geoToScreen(farPoint2, center.latitude, center.longitude, zoom, width, height)
+        drawLine(
+            color = rayColor2,
+            start = Offset(s2x, s2y),
+            end = Offset(e2x, e2y),
+            strokeWidth = 4f,
+            pathEffect = PathEffect.dashPathEffect(floatArrayOf(15f, 10f), 0f)
+        )
+    }
+
+    // Target intersection point
+    if (state.result is IntersectionResult.Success) {
+        val inter = state.result.intersectionPoint
+        val (ix, iy) = MapProjection.geoToScreen(inter, center.latitude, center.longitude, zoom, width, height)
+
+        // Draw tactical crosshair on target
+        drawCircle(Color.Red, radius = 16f, center = Offset(ix, iy), style = Stroke(width = 4f))
+        drawLine(Color.Red, Offset(ix - 24f, iy), Offset(ix + 24f, iy), strokeWidth = 3f)
+        drawLine(Color.Red, Offset(ix, iy - 24f), Offset(ix, iy + 24f), strokeWidth = 3f)
+    }
+}
+
+private fun DrawScope.drawRuler(
+    ruler: RulerState,
+    center: GeoPoint,
+    zoom: Double,
+    width: Float,
+    height: Float,
+    angleUnit: AngleUnit
+) {
+    val p1 = ruler.startPoint ?: return
+    val p2 = ruler.endPoint ?: return
+
+    val (s1x, s1y) = MapProjection.geoToScreen(p1, center.latitude, center.longitude, zoom, width, height)
+    val (s2x, s2y) = MapProjection.geoToScreen(p2, center.latitude, center.longitude, zoom, width, height)
+
+    val rulerColor = Color(0xFFFFD600)
+
+    drawLine(
+        color = rulerColor,
+        start = Offset(s1x, s1y),
+        end = Offset(s2x, s2y),
+        strokeWidth = 6f
+    )
+    drawCircle(rulerColor, radius = 10f, center = Offset(s1x, s1y))
+    drawCircle(rulerColor, radius = 10f, center = Offset(s2x, s2y))
+
+    // Badge in the center
+    val midX = (s1x + s2x) / 2f
+    val midY = (s1y + s2y) / 2f
+
+    val paint = AndroidPaint().apply {
+        color = android.graphics.Color.WHITE
+        textSize = 34f
+        isAntiAlias = true
+        setShadowLayer(6f, 0f, 0f, android.graphics.Color.BLACK)
+    }
+
+    val text = "${ruler.formatDistance()} | ${ruler.formatAzimuth(angleUnit)}"
+    drawContext.canvas.nativeCanvas.drawText(text, midX - 80f, midY - 20f, paint)
+}
+
+private fun DrawScope.drawWaypoints(
+    waypoints: List<WaypointEntity>,
+    selected: WaypointEntity?,
+    center: GeoPoint,
+    zoom: Double,
+    width: Float,
+    height: Float
+) {
+    val textPaint = AndroidPaint().apply {
+        color = android.graphics.Color.WHITE
+        textSize = 28f
+        isAntiAlias = true
+        setShadowLayer(4f, 0f, 0f, android.graphics.Color.BLACK)
+    }
+
+    waypoints.forEach { wp ->
+        val (sx, sy) = MapProjection.geoToScreen(wp.toGeoPoint(), center.latitude, center.longitude, zoom, width, height)
+        val isSelected = selected?.id == wp.id
+        val color = Color(wp.colorArgb)
+
+        // Draw pin
+        val radius = if (isSelected) 18f else 12f
+        drawCircle(color, radius = radius, center = Offset(sx, sy))
+        drawCircle(Color.White, radius = radius, center = Offset(sx, sy), style = Stroke(3f))
+
+        if (isSelected) {
+            drawCircle(Color.Cyan, radius = radius + 6f, center = Offset(sx, sy), style = Stroke(2f))
+        }
+
+        drawContext.canvas.nativeCanvas.drawText(wp.name, sx + 16f, sy + 10f, textPaint)
+    }
+}
+
+private fun DrawScope.drawCandidatePoint(
+    candidate: GeoPoint,
+    center: GeoPoint,
+    zoom: Double,
+    width: Float,
+    height: Float
+) {
+    val (sx, sy) = MapProjection.geoToScreen(candidate, center.latitude, center.longitude, zoom, width, height)
+    val amber = Color(0xFFFF9800)
+    val radius = 16f
+
+    // Concentric crosshair rings
+    drawCircle(amber, radius = radius, center = Offset(sx, sy))
+    drawCircle(Color.White, radius = radius, center = Offset(sx, sy), style = Stroke(3f))
+    drawCircle(
+        Color(0xFFFFB74D),
+        radius = radius + 8f,
+        center = Offset(sx, sy),
+        style = Stroke(2f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f), 0f))
+    )
+
+    // Crosshairs
+    drawLine(Color.White, Offset(sx - radius - 8f, sy), Offset(sx + radius + 8f, sy), strokeWidth = 2f)
+    drawLine(Color.White, Offset(sx, sy - radius - 8f), Offset(sx, sy + radius + 8f), strokeWidth = 2f)
+
+    val paint = AndroidPaint().apply {
+        color = android.graphics.Color.WHITE
+        textSize = 28f
+        isAntiAlias = true
+        setShadowLayer(6f, 0f, 0f, android.graphics.Color.BLACK)
+    }
+    drawContext.canvas.nativeCanvas.drawText("Точка-кандидат", sx + 22f, sy + 10f, paint)
+}
+
+private fun DrawScope.drawTargetBearingLine(
+    userLocation: GeoPoint,
+    target: GeoPoint,
+    center: GeoPoint,
+    zoom: Double,
+    width: Float,
+    height: Float
+) {
+    val (s1x, s1y) = MapProjection.geoToScreen(userLocation, center.latitude, center.longitude, zoom, width, height)
+    val (s2x, s2y) = MapProjection.geoToScreen(target, center.latitude, center.longitude, zoom, width, height)
+
+    val dash = PathEffect.dashPathEffect(floatArrayOf(12f, 8f), 0f)
+    drawLine(
+        color = Color(0xFFFFB74D),
+        start = Offset(s1x, s1y),
+        end = Offset(s2x, s2y),
+        strokeWidth = 3f,
+        pathEffect = dash
+    )
+}
+
+private fun DrawScope.drawUserLocation(
+    userLocation: GeoPoint,
+    orientationData: OrientationData,
+    center: GeoPoint,
+    zoom: Double,
+    width: Float,
+    height: Float
+) {
+    val (sx, sy) = MapProjection.geoToScreen(userLocation, center.latitude, center.longitude, zoom, width, height)
+
+    // Accuracy circle
+    userLocation.accuracy?.let { acc ->
+        val metersPerPixel = 156543.03392 * cos(Math.toRadians(center.latitude)) / 2.0.pow(zoom)
+        val radiusPixels = (acc / metersPerPixel).toFloat().coerceIn(16f, 300f)
+
+        drawCircle(
+            color = Color(0x222196F3),
+            radius = radiusPixels,
+            center = Offset(sx, sy)
+        )
+        drawCircle(
+            color = Color(0x662196F3),
+            radius = radiusPixels,
+            center = Offset(sx, sy),
+            style = Stroke(2f)
+        )
+    }
+
+    // Directional Cone pointing in heading direction
+    val heading = orientationData.trueHeadingDeg
+    rotate(heading, pivot = Offset(sx, sy)) {
+        val conePath = Path().apply {
+            moveTo(sx, sy - 42f)
+            lineTo(sx - 18f, sy + 10f)
+            lineTo(sx, sy)
+            lineTo(sx + 18f, sy + 10f)
+            close()
+        }
+        drawPath(conePath, color = Color(0xFF00E5FF))
+    }
+
+    // Center puck
+    drawCircle(Color.White, radius = 10f, center = Offset(sx, sy))
+    drawCircle(Color(0xFF0288D1), radius = 7f, center = Offset(sx, sy))
+}
+
+private fun DrawScope.drawCrosshair(width: Float, height: Float) {
+    val cx = width / 2f
+    val cy = height / 2f
+    val color = Color(0xCCFFFFFF)
+    val size = 20f
+
+    drawLine(color, Offset(cx - size, cy), Offset(cx - 6f, cy), strokeWidth = 2f)
+    drawLine(color, Offset(cx + 6f, cy), Offset(cx + size, cy), strokeWidth = 2f)
+    drawLine(color, Offset(cx, cy - size), Offset(cx, cy - 6f), strokeWidth = 2f)
+    drawLine(color, Offset(cx, cy + 6f), Offset(cx, cy + size), strokeWidth = 2f)
+}

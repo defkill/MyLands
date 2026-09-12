@@ -1,0 +1,6 @@
+{
+  "name": "Ориентирование",
+  "description": "Автономное приложение для ориентирования, навигации, геодезических засечек и работы с офлайн-картами",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
