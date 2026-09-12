@@ -290,6 +290,26 @@ fun NavigationMainScreen(
                                 text = {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Icon(
+                                            Icons.Default.DeleteSweep,
+                                            contentDescription = null,
+                                            tint = Color(0xFFFFB74D),
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("Очистить кэш слоя", color = Color(0xFFFFB74D))
+                                    }
+                                },
+                                onClick = {
+                                    viewModel.clearTileCacheForActiveSource()
+                                    showMapSourceMenu = false
+                                    Toast.makeText(context, "Кэш тайлов очищен", Toast.LENGTH_SHORT).show()
+                                }
+                            )
+                            HorizontalDivider(color = Color(0xFF37474F))
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
                                             Icons.Default.FileOpen,
                                             contentDescription = null,
                                             tint = Color(0xFF81C784),
