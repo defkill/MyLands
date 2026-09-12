@@ -92,7 +92,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _userPreferences = MutableStateFlow(UserPreferences())
     val userPreferences: StateFlow<UserPreferences> = _userPreferences.asStateFlow()
 
-    // Active Map Tool state machine (NONE, PLACE_WAYPOINT_PENDING, RULER, INTERSECTION)
+    // Active Map Tool state machine (NONE, PLACE_WAYPOINT_PENDING, RULER)
     private val _activeMapTool = MutableStateFlow(ActiveMapTool.NONE)
     val activeMapTool: StateFlow<ActiveMapTool> = _activeMapTool.asStateFlow()
 
@@ -104,8 +104,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _rulerState = MutableStateFlow(RulerState())
     val rulerState: StateFlow<RulerState> = _rulerState.asStateFlow()
 
-    private val _intersectionState = MutableStateFlow(IntersectionToolState())
-    val intersectionState: StateFlow<IntersectionToolState> = _intersectionState.asStateFlow()
 
     private val _routeBuilderState = MutableStateFlow(RouteBuilderState())
     val routeBuilderState: StateFlow<RouteBuilderState> = _routeBuilderState.asStateFlow()
@@ -345,15 +343,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Map tap router respecting active tool hierarchy:
-     * - If RULER or INTERSECTION is active, taps go to their respective handlers.
+     * - If RULER is active, taps go to its handler.
      * - When active tool is NONE or PLACE_WAYPOINT_PENDING, tapping on empty map places/moves
      *   a temporary candidate marker (without Room write) and sets state to PLACE_WAYPOINT_PENDING.
      */
     fun onMapTapped(tappedGeo: GeoPoint) {
         if (_rulerState.value.isActive || _activeMapTool.value == ActiveMapTool.RULER) {
-            return
-        }
-        if (_intersectionState.value.isActive || _activeMapTool.value == ActiveMapTool.INTERSECTION) {
             return
         }
 
@@ -449,42 +444,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun cancelRouteBuilder() {
         _routeBuilderState.value = RouteBuilderState(isActive = false)
-    }
-
-    // --- Navigation Tools: 2-Ray Intersection ---
-    fun openIntersectionTool() {
-        _candidatePoint.value = null
-        _selectedWaypoint.value = null
-        val p1 = gpsLocation.value ?: _mapCenter.value
-        val p2 = GeodesyEngine.destinationPoint(p1, 1000.0, 90.0) // 1km east
-        _intersectionState.value = IntersectionToolState(
-            isActive = true,
-            point1 = p1,
-            azimuth1Deg = 45.0,
-            point2 = p2,
-            azimuth2Deg = 315.0,
-            result = GeodesyEngine.intersectTwoAzimuths(p1, 45.0, p2, 315.0)
-        )
-        _activeMapTool.value = ActiveMapTool.INTERSECTION
-    }
-
-    fun updateIntersection(p1: GeoPoint, az1: Double, p2: GeoPoint, az2: Double) {
-        val res = GeodesyEngine.intersectTwoAzimuths(p1, az1, p2, az2)
-        _intersectionState.value = IntersectionToolState(
-            isActive = true,
-            point1 = p1,
-            azimuth1Deg = az1,
-            point2 = p2,
-            azimuth2Deg = az2,
-            result = res
-        )
-    }
-
-    fun closeIntersectionTool() {
-        _intersectionState.value = IntersectionToolState(isActive = false)
-        if (_activeMapTool.value == ActiveMapTool.INTERSECTION) {
-            _activeMapTool.value = ActiveMapTool.NONE
-        }
     }
 
     // --- Track Recording (Foreground Service + PDR) ---
