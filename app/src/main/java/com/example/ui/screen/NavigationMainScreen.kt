@@ -83,6 +83,26 @@ fun NavigationMainScreen(
     var showBatteryOptimizationDialog by remember { mutableStateOf(false) }
     var hasDismissedBatteryOptPrompt by remember { mutableStateOf(false) }
 
+    // Location permission can be missing even when the system location toggle is on:
+    // the OS switch and the per-app grant are separate things. Allow re-requesting it
+    // straight from the GPS button instead of dead-ending on "Требуется разрешение GPS".
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { result ->
+        val granted = result[android.Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+            result[android.Manifest.permission.ACCESS_COARSE_LOCATION] == true
+        if (granted) {
+            viewModel.locationTracker.startListening()
+            Toast.makeText(context, "Разрешение получено, поиск спутников…", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(
+                context,
+                "Без разрешения на геолокацию ваша позиция не отображается",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
@@ -427,7 +447,32 @@ fun NavigationMainScreen(
             ) {
                 // Center on GPS / Follow Location
                 FloatingActionButton(
-                    onClick = { viewModel.toggleFollowLocation() },
+                    onClick = {
+                        val hasPermission = androidx.core.content.ContextCompat.checkSelfPermission(
+                            context, android.Manifest.permission.ACCESS_FINE_LOCATION
+                        ) == android.content.pm.PackageManager.PERMISSION_GRANTED ||
+                            androidx.core.content.ContextCompat.checkSelfPermission(
+                                context, android.Manifest.permission.ACCESS_COARSE_LOCATION
+                            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+                        if (!hasPermission) {
+                            locationPermissionLauncher.launch(
+                                arrayOf(
+                                    android.Manifest.permission.ACCESS_FINE_LOCATION,
+                                    android.Manifest.permission.ACCESS_COARSE_LOCATION
+                                )
+                            )
+                        } else {
+                            viewModel.toggleFollowLocation()
+                            if (gpsLocation == null) {
+                                Toast.makeText(
+                                    context,
+                                    "Поиск спутников… под открытым небом это занимает до минуты",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                        }
+                    },
                     modifier = Modifier.size(48.dp).testTag("gps_follow_button"),
                     containerColor = if (isFollowingLocation) Color(0xFF2E7D32) else Color(0xFF263238),
                     contentColor = Color.White
