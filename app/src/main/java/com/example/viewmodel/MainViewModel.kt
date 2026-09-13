@@ -206,6 +206,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun toggleFollowLocation() {
         val next = !_isFollowingLocation.value
         _isFollowingLocation.value = next
+
+        // Safety net: if updates were never registered (permission granted later from
+        // system settings, GPS switched on after launch, provider was disabled at start),
+        // retry here instead of silently doing nothing when the user taps the button.
+        if (next && !locationTracker.isActive()) {
+            locationTracker.startListening()
+        }
+
         if (next && gpsLocation.value != null) {
             _mapCenter.value = gpsLocation.value!!
         }
