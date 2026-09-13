@@ -52,6 +52,7 @@ fun TacticalMapView(
     onRulerPointChanged: (GeoPoint, GeoPoint) -> Unit,
     routeBuilderState: RouteBuilderState,
     savedRoutes: List<RouteEntity> = emptyList(),
+    triangulationState: TriangulationState = TriangulationState(),
     activeTrackPoints: List<TrackPointEntity>,
     angleUnit: AngleUnit,
     modifier: Modifier = Modifier
@@ -204,6 +205,11 @@ fun TacticalMapView(
 
         // 4b. Draw Route Builder Polylines & Legs (currently being edited)
         drawRouteBuilder(routeBuilderState, center, zoom, width, height, angleUnit)
+
+        // 5. Draw triangulation rays and their crossing point
+        if (triangulationState.isActive && triangulationState.rays.isNotEmpty()) {
+            drawTriangulation(triangulationState, center, zoom, width, height)
+        }
 
         // 6. Draw Ruler
         if (rulerState.isActive && rulerState.startPoint != null && rulerState.endPoint != null) {
@@ -387,6 +393,62 @@ private fun DrawScope.drawTrackPoints(
             strokeWidth = 6f,
             pathEffect = effect
         )
+    }
+}
+
+private fun DrawScope.drawTriangulation(
+    state: TriangulationState,
+    center: GeoPoint,
+    zoom: Double,
+    width: Float,
+    height: Float
+) {
+    val rayColor = Color(0xFFFF7043)
+    val dash = PathEffect.dashPathEffect(floatArrayOf(16f, 10f), 0f)
+
+    val paint = AndroidPaint().apply {
+        color = android.graphics.Color.rgb(255, 138, 101)
+        textSize = 26f
+        isAntiAlias = true
+        setShadowLayer(4f, 0f, 0f, android.graphics.Color.BLACK)
+    }
+
+    state.rays.forEach { ray ->
+        val start = ray.originPoint
+        val end = GeodesyEngine.destinationPoint(start, ray.effectiveLengthMeters(), ray.azimuthDeg)
+
+        val (sx, sy) = MapProjection.geoToScreen(start, center.latitude, center.longitude, zoom, width, height)
+        val (ex, ey) = MapProjection.geoToScreen(end, center.latitude, center.longitude, zoom, width, height)
+
+        // Bounded segments are solid, open-ended rays are dashed.
+        drawLine(
+            color = rayColor,
+            start = Offset(sx, sy),
+            end = Offset(ex, ey),
+            strokeWidth = 4f,
+            pathEffect = if (ray.lengthMeters == null) dash else null
+        )
+
+        val label = if (ray.lengthMeters != null) {
+            String.format(java.util.Locale.US, "%.0f°/%.0f м", ray.azimuthDeg, ray.lengthMeters)
+        } else {
+            String.format(java.util.Locale.US, "%.0f°", ray.azimuthDeg)
+        }
+        drawContext.canvas.nativeCanvas.drawText(label, (sx + ex) / 2f, (sy + ey) / 2f - 10f, paint)
+
+        if (ray.lengthMeters != null) {
+            drawCircle(rayColor, radius = 9f, center = Offset(ex, ey))
+            drawCircle(Color.White, radius = 9f, center = Offset(ex, ey), style = Stroke(2f))
+        }
+    }
+
+    // Crossing point marker
+    state.intersectionPoint()?.let { pt ->
+        val (ix, iy) = MapProjection.geoToScreen(pt, center.latitude, center.longitude, zoom, width, height)
+        val hit = Color(0xFFD32F2F)
+        drawCircle(hit, radius = 16f, center = Offset(ix, iy), style = Stroke(4f))
+        drawLine(hit, Offset(ix - 26f, iy), Offset(ix + 26f, iy), strokeWidth = 3f)
+        drawLine(hit, Offset(ix, iy - 26f), Offset(ix, iy + 26f), strokeWidth = 3f)
     }
 }
 
