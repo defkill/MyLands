@@ -416,6 +416,94 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // --- Navigation Tools: Triangulation (rays by azimuth + optional distance) ---
+    private val _triangulationState = MutableStateFlow(TriangulationState())
+    val triangulationState: StateFlow<TriangulationState> = _triangulationState.asStateFlow()
+
+    fun startTriangulation() {
+        _triangulationState.value = TriangulationState(isActive = true)
+    }
+
+    fun cancelTriangulation() {
+        _triangulationState.value = TriangulationState(isActive = false)
+    }
+
+    /**
+     * Adds a ray from [origin] along [azimuthDeg]. A null/blank [lengthMeters] means an
+     * open-ended ray; a value makes it a fixed-length segment. Keeps at most two rays and
+     * recomputes their intersection as soon as two are present.
+     */
+    fun addTriangulationRay(origin: WaypointEntity, azimuthDeg: Double, lengthMeters: Double?) {
+        val current = _triangulationState.value
+        val rays = (current.rays + AzimuthRay(origin, azimuthDeg, lengthMeters)).takeLast(2)
+
+        val result = if (rays.size == 2) {
+            GeodesyEngine.intersectTwoAzimuths(
+                rays[0].originPoint, rays[0].azimuthDeg,
+                rays[1].originPoint, rays[1].azimuthDeg
+            )
+        } else null
+
+        _triangulationState.value = current.copy(isActive = true, rays = rays, result = result)
+
+        // Jump the map to the crossing point so the user immediately sees it.
+        (result as? IntersectionResult.Success)?.let { setMapCenter(it.intersectionPoint) }
+    }
+
+    fun removeTriangulationRay(index: Int) {
+        val current = _triangulationState.value
+        if (index !in current.rays.indices) return
+        val rays = current.rays.toMutableList().also { it.removeAt(index) }
+        _triangulationState.value = current.copy(rays = rays, result = null)
+    }
+
+    /** Saves the computed crossing point as a real waypoint. */
+    fun saveTriangulationPoint(name: String) {
+        val pt = _triangulationState.value.intersectionPoint() ?: return
+        addWaypointAt(
+            name = name,
+            latitude = pt.latitude,
+            longitude = pt.longitude,
+            altitude = pt.altitude,
+            description = "Пересечение азимутов (триангуляция)",
+            colorArgb = 0xFFD32F2F.toInt()
+        )
+        _triangulationState.value = TriangulationState(isActive = false)
+    }
+
+    /** Saves the far end of a fixed-length segment as a waypoint. */
+    fun saveRayEndpoint(ray: AzimuthRay, name: String) {
+        val len = ray.lengthMeters ?: return
+        val end = GeodesyEngine.destinationPoint(ray.originPoint, len, ray.azimuthDeg)
+        addWaypointAt(
+            name = name,
+            latitude = end.latitude,
+            longitude = end.longitude,
+            altitude = null,
+            description = "Отложено от '${ray.origin.name}': Аз ${"%.1f".format(ray.azimuthDeg)}°, ${"%.0f".format(len)} м",
+            colorArgb = 0xFFFFA726.toInt()
+        )
+    }
+
+    // --- Waypoint editing ---
+    fun updateWaypointDetails(waypoint: WaypointEntity, newName: String, newDescription: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.updateWaypoint(
+                waypoint.copy(name = newName, description = newDescription)
+            )
+        }
+    }
+
+    fun deleteRoute(route: RouteEntity) {
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.deleteRoute(route.id)
+        }
+    }
+
+    fun setRouteName(name: String) {
+        _routeBuilderState.value = _routeBuilderState.value.copy(routeName = name)
+    }
+
     // --- Navigation Tools: Route Builder by Points ---
     fun startRouteBuilder(initialName: String = "Маршрут") {
         _routeBuilderState.value = RouteBuilderState(isActive = true, routeName = initialName)
