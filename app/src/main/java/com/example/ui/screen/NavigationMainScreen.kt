@@ -61,6 +61,7 @@ fun NavigationMainScreen(
 
     val waypoints by viewModel.waypoints.collectAsStateWithLifecycle()
     val routes by viewModel.routes.collectAsStateWithLifecycle()
+    val triangulationState by viewModel.triangulationState.collectAsStateWithLifecycle()
     val selectedWaypoint by viewModel.selectedWaypoint.collectAsStateWithLifecycle()
     val candidatePoint by viewModel.candidatePoint.collectAsStateWithLifecycle()
     val activeMapTool by viewModel.activeMapTool.collectAsStateWithLifecycle()
@@ -72,6 +73,9 @@ fun NavigationMainScreen(
     val isCoordinateModalOpen by viewModel.isCoordinateModalOpen.collectAsStateWithLifecycle()
 
     var showAddWaypointDialog by remember { mutableStateOf(false) }
+    var showCompassScreen by remember { mutableStateOf(false) }
+    var showTriangulationDialog by remember { mutableStateOf(false) }
+    var editingWaypoint by remember { mutableStateOf<com.example.data.entity.WaypointEntity?>(null) }
     var showSavedWaypointsSheet by remember { mutableStateOf(false) }
     var showSettlementSearchSheet by remember { mutableStateOf(false) }
     var showMapSourceMenu by remember { mutableStateOf(false) }
@@ -150,7 +154,10 @@ fun NavigationMainScreen(
                 tileManager = viewModel.tileManager,
                 waypoints = waypoints,
                 selectedWaypoint = selectedWaypoint,
-                onWaypointSelected = { viewModel.selectWaypoint(it) },
+                onWaypointSelected = {
+                    viewModel.selectWaypoint(it)
+                    editingWaypoint = it
+                },
                 candidatePoint = candidatePoint,
                 activeMapTool = activeMapTool,
                 onMapTapped = { viewModel.onMapTapped(it) },
@@ -158,6 +165,7 @@ fun NavigationMainScreen(
                 onRulerPointChanged = { p1, p2 -> viewModel.updateRulerPoints(p1, p2) },
                 routeBuilderState = routeBuilderState,
                 savedRoutes = routes,
+                triangulationState = triangulationState,
                 activeTrackPoints = currentTrackPoints,
                 angleUnit = userPreferences.defaultAngleUnit
             )
@@ -173,9 +181,11 @@ fun NavigationMainScreen(
             ) {
                 // Compass Rose & Heading Pill
                 Surface(
+                    onClick = { showCompassScreen = true },
                     color = Color(0xDD161C24),
                     shape = RoundedCornerShape(20.dp),
-                    tonalElevation = 4.dp
+                    tonalElevation = 4.dp,
+                    modifier = Modifier.testTag("compass_chip_button")
                 ) {
                     Row(
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
@@ -435,6 +445,19 @@ fun NavigationMainScreen(
                     Icon(Icons.Default.AddLocation, contentDescription = "Добавить точку", modifier = Modifier.size(22.dp))
                 }
 
+                // Triangulation (rays by azimuth/distance)
+                FloatingActionButton(
+                    onClick = {
+                        viewModel.startTriangulation()
+                        showTriangulationDialog = true
+                    },
+                    modifier = Modifier.size(48.dp).testTag("triangulation_button"),
+                    containerColor = Color(0xFF263238),
+                    contentColor = Color(0xFFFF7043)
+                ) {
+                    Icon(Icons.Default.ChangeHistory, contentDescription = "Триангуляция", modifier = Modifier.size(22.dp))
+                }
+
                 // Ruler Tool Toggle
                 FloatingActionButton(
                     onClick = { viewModel.toggleRuler() },
@@ -547,11 +570,16 @@ fun NavigationMainScreen(
                         savedRoutes = routes,
                         angleUnit = userPreferences.defaultAngleUnit,
                         onToggleWaypoint = { viewModel.toggleWaypointInRoute(it) },
+                        onRouteNameChanged = { viewModel.setRouteName(it) },
                         onSaveRoute = {
                             viewModel.saveCurrentRoute()
                             Toast.makeText(context, "Маршрут сохранен!", Toast.LENGTH_SHORT).show()
                         },
                         onLoadRoute = { viewModel.loadRouteIntoBuilder(it) },
+                        onDeleteRoute = {
+                            viewModel.deleteRoute(it)
+                            Toast.makeText(context, "Маршрут удалён", Toast.LENGTH_SHORT).show()
+                        },
                         onCancel = { viewModel.cancelRouteBuilder() }
                     )
                 }
@@ -616,6 +644,72 @@ fun NavigationMainScreen(
     }
 
     // Add Waypoint Dialog
+    editingWaypoint?.let { wp ->
+        EditWaypointDialog(
+            waypoint = wp,
+            onSave = { name, desc ->
+                viewModel.updateWaypointDetails(wp, name, desc)
+                editingWaypoint = null
+                Toast.makeText(context, "Точка обновлена", Toast.LENGTH_SHORT).show()
+            },
+            onStartTriangulation = {
+                viewModel.startTriangulation()
+                editingWaypoint = null
+                showTriangulationDialog = true
+            },
+            onDelete = {
+                viewModel.deleteWaypoint(wp.id)
+                editingWaypoint = null
+                Toast.makeText(context, "Точка удалена", Toast.LENGTH_SHORT).show()
+            },
+            onDismiss = { editingWaypoint = null }
+        )
+    }
+
+    if (showTriangulationDialog) {
+        TriangulationDialog(
+            state = triangulationState,
+            allWaypoints = waypoints,
+            preselected = selectedWaypoint,
+            onAddRay = { wp, az, dist -> viewModel.addTriangulationRay(wp, az, dist) },
+            onRemoveRay = { viewModel.removeTriangulationRay(it) },
+            onSaveIntersection = { name ->
+                viewModel.saveTriangulationPoint(name)
+                showTriangulationDialog = false
+                Toast.makeText(context, "Точка пересечения создана", Toast.LENGTH_SHORT).show()
+            },
+            onSaveRayEnd = { ray, name ->
+                viewModel.saveRayEndpoint(ray, name)
+                Toast.makeText(context, "Точка на конце отрезка создана", Toast.LENGTH_SHORT).show()
+            },
+            onDismiss = {
+                showTriangulationDialog = false
+                viewModel.cancelTriangulation()
+            }
+        )
+    }
+
+    if (showCompassScreen) {
+        CompassFullScreenDialog(
+            orientationData = orientationData,
+            position = gpsLocation ?: pdrState.lastEstimatedPosition,
+            coordinateSystem = userPreferences.defaultCoordinateSystem,
+            angleUnit = userPreferences.defaultAngleUnit,
+            onCreatePoint = { pt ->
+                viewModel.addWaypointAt(
+                    name = "Точка ${System.currentTimeMillis() % 10000}",
+                    latitude = pt.latitude,
+                    longitude = pt.longitude,
+                    altitude = pt.altitude,
+                    description = "Создана с экрана компаса",
+                    colorArgb = 0xFF00E5FF.toInt()
+                )
+                Toast.makeText(context, "Точка сохранена", Toast.LENGTH_SHORT).show()
+            },
+            onDismiss = { showCompassScreen = false }
+        )
+    }
+
     if (showAddWaypointDialog) {
         val targetPoint = candidatePoint ?: (gpsLocation ?: mapCenter)
         AddWaypointDialog(
