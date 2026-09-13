@@ -109,6 +109,21 @@ fun CompassFullScreenDialog(
                                 fontSize = 20.sp
                             )
 
+                            if (position == null) {
+                                Spacer(modifier = Modifier.height(14.dp))
+                                Text(
+                                    text = "Координаты недоступны",
+                                    color = Color(0xFFFFB74D),
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "Нет данных GPS — разрешите геолокацию\nи дождитесь спутников",
+                                    color = Color(0xFF607D8B),
+                                    fontSize = 11.sp
+                                )
+                            }
+
                             if (position != null) {
                                 Spacer(modifier = Modifier.height(14.dp))
                                 Text(
