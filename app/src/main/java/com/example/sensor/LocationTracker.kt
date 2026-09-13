@@ -30,6 +30,9 @@ class LocationTracker(private val context: Context) : LocationListener {
 
     private var isListening = false
 
+    /** True once location updates have been successfully registered. */
+    fun isActive(): Boolean = isListening
+
     @SuppressLint("MissingPermission")
     fun startListening() {
         if (isListening) return
