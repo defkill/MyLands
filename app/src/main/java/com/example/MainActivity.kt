@@ -45,7 +45,17 @@ class MainActivity : ComponentActivity() {
             this@MainActivity,
             Manifest.permission.ACCESS_FINE_LOCATION
           ) == PackageManager.PERMISSION_GRANTED
-          if (!hasFine) {
+          val hasCoarse = ContextCompat.checkSelfPermission(
+            this@MainActivity,
+            Manifest.permission.ACCESS_COARSE_LOCATION
+          ) == PackageManager.PERMISSION_GRANTED
+
+          if (hasFine || hasCoarse) {
+            // Permission was already granted on a previous run: start immediately.
+            // Without this branch GPS only ever started right after the permission
+            // dialog, so on every later launch the user was never located.
+            viewModel.locationTracker.startListening()
+          } else {
             permissionLauncher.launch(
               arrayOf(
                 Manifest.permission.ACCESS_FINE_LOCATION,
