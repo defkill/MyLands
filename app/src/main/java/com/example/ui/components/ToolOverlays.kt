@@ -129,8 +129,10 @@ fun RouteBuilderPanel(
     savedRoutes: List<RouteEntity>,
     angleUnit: AngleUnit,
     onToggleWaypoint: (WaypointEntity) -> Unit,
+    onRouteNameChanged: (String) -> Unit,
     onSaveRoute: () -> Unit,
     onLoadRoute: (RouteEntity) -> Unit,
+    onDeleteRoute: (RouteEntity) -> Unit,
     onCancel: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -160,6 +162,25 @@ fun RouteBuilderPanel(
                     Icon(Icons.Default.Close, contentDescription = "Отмена", tint = Color.Gray)
                 }
             }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Editable route name
+            OutlinedTextField(
+                value = routeState.routeName,
+                onValueChange = onRouteNameChanged,
+                label = { Text("Название маршрута") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().testTag("route_name_field"),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedTextColor = Color.White,
+                    unfocusedTextColor = Color.White,
+                    focusedBorderColor = Color(0xFF00E5FF),
+                    unfocusedBorderColor = Color(0xFF37474F),
+                    focusedLabelColor = Color(0xFF00E5FF),
+                    unfocusedLabelColor = Color(0xFF78909C)
+                )
+            )
 
             Spacer(modifier = Modifier.height(10.dp))
 
@@ -253,28 +274,44 @@ fun RouteBuilderPanel(
                     items(savedRoutes) { route ->
                         Surface(
                             color = Color(0xFF1B3A2A),
-                            shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier.clickable { onLoadRoute(route) }
+                            shape = RoundedCornerShape(8.dp)
                         ) {
-                            Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
-                                Text(
-                                    text = route.name,
-                                    color = Color(0xFFB9F6CA),
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    maxLines = 1
-                                )
-                                Text(
-                                    text = String.format(
-                                        java.util.Locale.US,
-                                        "%.2f км · %d точек",
-                                        route.totalDistanceMeters / 1000.0,
-                                        route.parseWaypointIds().size
-                                    ),
-                                    color = Color(0xFF81C784),
-                                    fontSize = 11.sp,
-                                    fontFamily = FontFamily.Monospace
-                                )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Column(
+                                    modifier = Modifier
+                                        .clickable { onLoadRoute(route) }
+                                        .padding(start = 10.dp, top = 6.dp, bottom = 6.dp, end = 4.dp)
+                                ) {
+                                    Text(
+                                        text = route.name,
+                                        color = Color(0xFFB9F6CA),
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1
+                                    )
+                                    Text(
+                                        text = String.format(
+                                            java.util.Locale.US,
+                                            "%.2f км · %d точек",
+                                            route.totalDistanceMeters / 1000.0,
+                                            route.parseWaypointIds().size
+                                        ),
+                                        color = Color(0xFF81C784),
+                                        fontSize = 11.sp,
+                                        fontFamily = FontFamily.Monospace
+                                    )
+                                }
+                                IconButton(
+                                    onClick = { onDeleteRoute(route) },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Delete,
+                                        contentDescription = "Удалить маршрут",
+                                        tint = Color(0xFFEF9A9A),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
                             }
                         }
                     }
