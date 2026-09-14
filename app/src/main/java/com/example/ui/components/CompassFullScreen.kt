@@ -42,6 +42,8 @@ fun CompassFullScreenDialog(
     position: GeoPoint?,
     coordinateSystem: CoordinateSystem,
     angleUnit: AngleUnit,
+    isEstimated: Boolean = false,
+    blindDistanceMeters: Double = 0.0,
     onCreatePoint: (GeoPoint) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -127,8 +129,12 @@ fun CompassFullScreenDialog(
                             if (position != null) {
                                 Spacer(modifier = Modifier.height(14.dp))
                                 Text(
-                                    text = coordinateSystem.shortName,
-                                    color = Color(0xFF607D8B),
+                                    text = if (isEstimated) {
+                                        "${coordinateSystem.shortName} · СЧИСЛЕНИЕ"
+                                    } else {
+                                        coordinateSystem.shortName
+                                    },
+                                    color = if (isEstimated) Color(0xFFFFB74D) else Color(0xFF607D8B),
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold
                                 )
@@ -138,7 +144,7 @@ fun CompassFullScreenDialog(
                                         text = GeodesyEngine
                                             .getCoordinateBundle(position.latitude, position.longitude, position.altitude)
                                             .getFormatted(coordinateSystem),
-                                        color = Color(0xFF81D4FA),
+                                        color = if (isEstimated) Color(0xFFFFCC80) else Color(0xFF81D4FA),
                                         fontSize = 15.sp,
                                         fontFamily = FontFamily.Monospace,
                                         fontWeight = FontWeight.Bold
@@ -164,9 +170,13 @@ fun CompassFullScreenDialog(
                 }
 
                 Text(
-                    text = if (position == null) "Ожидание местоположения…"
-                    else "Магнитное склонение: ${"%+.1f".format(orientationData.magneticDeclinationDeg)}°",
-                    color = Color(0xFF546E7A),
+                    text = when {
+                        position == null -> "Ожидание местоположения…"
+                        isEstimated -> "Без GPS: пройдено по счислению ${"%.0f".format(blindDistanceMeters)} м · " +
+                            "погрешность растёт примерно на 5-10% пути"
+                        else -> "Магнитное склонение: ${"%+.1f".format(orientationData.magneticDeclinationDeg)}°"
+                    },
+                    color = if (isEstimated) Color(0xFFFFB74D) else Color(0xFF546E7A),
                     fontSize = 12.sp,
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
