@@ -235,6 +235,24 @@ class TileManager(private val context: Context) {
      * Needed after a provider starts returning "blocked"/placeholder tiles, because those were
      * previously written to disk and would otherwise be served from cache forever.
      */
+    /**
+     * Number of cached tiles and their total size on disk, so the UI can tell the user what
+     * "pack the cache" will actually produce instead of leaving them guessing.
+     */
+    fun getCacheStats(): Pair<Int, Long> {
+        return try {
+            if (!baseCacheDir.exists()) return 0 to 0L
+            var count = 0
+            var bytes = 0L
+            baseCacheDir.walkTopDown()
+                .filter { it.isFile && (it.name.endsWith(".png") || it.name.endsWith(".jpg")) }
+                .forEach { count++; bytes += it.length() }
+            count to bytes
+        } catch (_: Exception) {
+            0 to 0L
+        }
+    }
+
     fun clearDiskCache(sourceId: String? = null) {
         try {
             val target = if (sourceId == null) baseCacheDir else File(baseCacheDir, sourceId)
