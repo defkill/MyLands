@@ -20,9 +20,9 @@ import com.example.MainActivity
 import com.example.data.AppDatabase
 import com.example.data.entity.TrackEntity
 import com.example.data.entity.TrackPointEntity
-import com.example.geodesy.GeodesyEngine
 import com.example.model.GeoPoint
 import com.example.sensor.GpsStatus
+import com.example.data.track.TrackFilter
 import com.example.sensor.LocationTracker
 import com.example.sensor.OrientationManager
 import com.example.sensor.StepDetectorManager
@@ -347,13 +347,10 @@ class TrackingService : Service() {
 
                 if (track != null) {
                     val points = trackDao.getTrackPointsSync(track.id)
-                    var totalDist = 0.0
-                    for (i in 0 until points.size - 1) {
-                        totalDist += GeodesyEngine.distanceMeters(
-                            points[i].latitude, points[i].longitude,
-                            points[i + 1].latitude, points[i + 1].longitude
-                        )
-                    }
+
+                    // Report the cleaned length: one GPS jump must not add kilometres that
+                    // were never walked. Raw points remain stored as recorded.
+                    val totalDist = TrackFilter.filter(points).distanceMeters
                     val hasDr = points.any { it.source == TrackPointEntity.SOURCE_DEAD_RECKONING }
 
                     trackDao.updateTrack(
