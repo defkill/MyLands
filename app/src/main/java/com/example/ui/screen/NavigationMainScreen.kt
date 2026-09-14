@@ -687,6 +687,9 @@ fun NavigationMainScreen(
                 visibleTrackIds = visibleTrackIds,
                 isRecording = isRecordingNow,
                 showRawTracks = showRawTracks,
+                serviceRunning = viewModel.isTrackingServiceRunning.collectAsStateWithLifecycle().value,
+                servicePointCount = viewModel.serviceRecordedPointsCount.collectAsStateWithLifecycle().value,
+                hasWakeUpStepSensor = viewModel.stepDetectorManager.hasWakeUpStepSensor,
                 onToggleRawTracks = { viewModel.toggleRawTracks() },
                 onStartRecording = {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
