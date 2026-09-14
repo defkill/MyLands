@@ -40,6 +40,14 @@ class LocationTracker(private val context: Context) : LocationListener {
     private val _currentLocation = MutableStateFlow<GeoPoint?>(null)
     val currentLocation: StateFlow<GeoPoint?> = _currentLocation.asStateFlow()
 
+    /**
+     * Position of the last real fix before the signal was lost, used as the dead-reckoning
+     * anchor. Separate from [currentLocation] so consumers can tell "we are here" from
+     * "this is where we last were".
+     */
+    private val _lastFixBeforeSignalLoss = MutableStateFlow<GeoPoint?>(null)
+    val lastFixBeforeSignalLoss: StateFlow<GeoPoint?> = _lastFixBeforeSignalLoss.asStateFlow()
+
     private val _gpsStatus = MutableStateFlow(GpsStatus.SEARCHING)
     val gpsStatus: StateFlow<GpsStatus> = _gpsStatus.asStateFlow()
 
@@ -103,6 +111,12 @@ class LocationTracker(private val context: Context) : LocationListener {
      */
     @SuppressLint("MissingPermission")
     fun startListening() {
+        // Register the provider-change receiver FIRST. Previously this sat after the early
+        // return below, so launching the app with location switched off meant we never
+        // subscribed to the broadcast — and turning GPS on from the shade did nothing until
+        // the user pressed the locate button or restarted the app.
+        registerProvidersReceiver()
+
         val gpsEnabled = safeIsProviderEnabled(LocationManager.GPS_PROVIDER)
         val networkEnabled = safeIsProviderEnabled(LocationManager.NETWORK_PROVIDER)
 
@@ -110,8 +124,6 @@ class LocationTracker(private val context: Context) : LocationListener {
             _gpsStatus.value = GpsStatus.DISABLED
             return
         }
-
-        registerProvidersReceiver()
 
         try {
             // Seed with the last known position so the map has something before the first fix.
@@ -239,7 +251,11 @@ class LocationTracker(private val context: Context) : LocationListener {
         registeredProviders.remove(provider)
         if (registeredProviders.isEmpty()) {
             _gpsStatus.value = GpsStatus.DISABLED
-            _currentLocation.value = null
+            // The last fix is deliberately KEPT: dead reckoning needs it as the anchor to
+            // count steps from. Clearing it here left the compass and the waypoint bearings
+            // blank exactly when the user is off-grid and needs them most. Consumers tell
+            // live fixes from stale ones via gpsStatus, not by this value being null.
+            _lastFixBeforeSignalLoss.value = _currentLocation.value
         }
     }
 
