@@ -124,6 +124,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _currentTrackPoints = MutableStateFlow<List<TrackPointEntity>>(emptyList())
     val currentTrackPoints: StateFlow<List<TrackPointEntity>> = _currentTrackPoints.asStateFlow()
 
+    /**
+     * When true the map shows the unfiltered recording, including GPS outliers.
+     * Off by default; the filter never alters what is stored.
+     *
+     * Declared before init(): Kotlin initialises properties in declaration order, and the
+     * coroutines started in init read this flag. Declaring it further down left it null at
+     * that moment and crashed the app on launch.
+     */
+    private val _showRawTracks = MutableStateFlow(false)
+    val showRawTracks: StateFlow<Boolean> = _showRawTracks.asStateFlow()
+
     init {
         orientationManager.start()
         locationTracker.startListening()
@@ -497,13 +508,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // --- Recorded tracks management ---
-
-    /**
-     * When true the map shows the unfiltered recording, including GPS outliers.
-     * Off by default; the filter never alters what is stored.
-     */
-    private val _showRawTracks = MutableStateFlow(false)
-    val showRawTracks: StateFlow<Boolean> = _showRawTracks.asStateFlow()
 
     fun toggleRawTracks() {
         _showRawTracks.value = !_showRawTracks.value
