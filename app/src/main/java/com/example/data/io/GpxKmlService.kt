@@ -1,6 +1,8 @@
 package com.example.data.io
 
 import com.example.data.entity.RouteEntity
+import com.example.data.entity.TrackEntity
+import com.example.data.entity.TrackPointEntity
 import com.example.data.entity.WaypointEntity
 import com.example.model.GeoPoint
 import org.w3c.dom.Element
@@ -63,6 +65,37 @@ object GpxKmlService {
             sb.append("  </rte>\n")
         }
 
+        sb.append("</gpx>\n")
+        return sb.toString()
+    }
+
+    /**
+     * Exports a recorded track as a GPX <trk>. Dead-reckoning points are kept in the same
+     * segment as GPS points so the walked path stays continuous; their origin is preserved
+     * in the point <type> so it is not lost on re-import.
+     */
+    fun exportTrackGpx(track: TrackEntity, points: List<TrackPointEntity>): String {
+        val sb = StringBuilder()
+        sb.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
+        sb.append("<gpx version=\"1.1\" creator=\"MyLands-Android\" xmlns=\"http://www.topografix.com/GPX/1/1\">\n")
+        sb.append("  <metadata>\n")
+        sb.append("    <name>${escapeXml(track.name)}</name>\n")
+        sb.append("    <time>${isoDateFmt.format(Date(track.startTime))}</time>\n")
+        sb.append("  </metadata>\n")
+        sb.append("  <trk>\n")
+        sb.append("    <name>${escapeXml(track.name)}</name>\n")
+        sb.append("    <trkseg>\n")
+        for (pt in points) {
+            sb.append("      <trkpt lat=\"${pt.latitude}\" lon=\"${pt.longitude}\">\n")
+            if (pt.altitudeMeters != null) {
+                sb.append("        <ele>${pt.altitudeMeters}</ele>\n")
+            }
+            sb.append("        <time>${isoDateFmt.format(Date(pt.timestamp))}</time>\n")
+            sb.append("        <type>${if (pt.source == 1) "dead_reckoning" else "gps"}</type>\n")
+            sb.append("      </trkpt>\n")
+        }
+        sb.append("    </trkseg>\n")
+        sb.append("  </trk>\n")
         sb.append("</gpx>\n")
         return sb.toString()
     }
