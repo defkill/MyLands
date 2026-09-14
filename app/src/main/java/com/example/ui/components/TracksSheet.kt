@@ -41,6 +41,9 @@ fun TracksSheet(
     visibleTrackIds: Set<Long>,
     isRecording: Boolean,
     showRawTracks: Boolean,
+    serviceRunning: Boolean,
+    servicePointCount: Int,
+    hasWakeUpStepSensor: Boolean,
     onToggleRawTracks: () -> Unit,
     onStartRecording: () -> Unit,
     onStopRecording: () -> Unit,
@@ -103,6 +106,43 @@ fun TracksSheet(
                     if (isRecording) "Остановить запись" else "Начать запись трека",
                     fontWeight = FontWeight.Bold
                 )
+            }
+
+            // Recording diagnostics: which component is actually writing points, and whether
+            // this device can count steps while asleep. Both decide whether a track survives
+            // with the phone locked in a pocket.
+            if (isRecording) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Surface(color = Color(0xFF17212B), shape = RoundedCornerShape(8.dp)) {
+                    Column(modifier = Modifier.fillMaxWidth().padding(10.dp)) {
+                        Text(
+                            text = if (serviceRunning) {
+                                "Пишет фоновая служба · точек: $servicePointCount"
+                            } else {
+                                "Пишет приложение (служба не запущена)"
+                            },
+                            color = if (serviceRunning) Color(0xFF81C784) else Color(0xFFFFB74D),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = if (hasWakeUpStepSensor) {
+                                "Датчик шагов будит процессор — запись идёт с выключенным экраном"
+                            } else {
+                                "Нет пробуждающего датчика шагов — процессор удерживается включённым, расход батареи выше"
+                            },
+                            color = Color(0xFF78909C),
+                            fontSize = 10.sp
+                        )
+                        if (!serviceRunning) {
+                            Text(
+                                text = "С заблокированным экраном запись может прерваться",
+                                color = Color(0xFFEF9A9A),
+                                fontSize = 10.sp
+                            )
+                        }
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.height(10.dp))
