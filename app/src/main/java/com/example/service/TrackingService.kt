@@ -12,6 +12,7 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.util.Log
 import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
@@ -42,6 +43,7 @@ import kotlinx.coroutines.flow.asStateFlow
 class TrackingService : Service() {
 
     companion object {
+        private const val TAG = "TrackingService"
         const val ACTION_START_TRACKING = "com.example.service.action.START_TRACKING"
         const val ACTION_STOP_TRACKING = "com.example.service.action.STOP_TRACKING"
         const val ACTION_CHECKPOINT_ALARM = "com.example.service.action.CHECKPOINT_ALARM"
@@ -186,6 +188,15 @@ class TrackingService : Service() {
         locationTracker.startListening()
         orientationManager.start()
         stepDetectorManager.start()
+
+        // Brief per-event wake locks only work if something wakes the CPU in the first place.
+        // With a wake-up step detector the sensor itself does that. Without one, step events
+        // stop entirely during deep sleep and the dead-reckoning track dies a minute after the
+        // screen goes off — so on those devices we hold the lock for the whole session and
+        // accept the battery cost, because a track that stops is worthless in the field.
+        if (!stepDetectorManager.hasWakeUpStepSensor) {
+            acquireSustainedWakeLock()
+        }
 
         // 1. Subscribe to orientation changes -> feeds current azimuth to PDR
         serviceScope.launch {
@@ -480,6 +491,42 @@ class TrackingService : Service() {
      * during the execution of critical work (processing a GPS/sensor event and Room DB write).
      * The lock is released immediately once processing finishes, or automatically released by the OS after [timeoutMs].
      */
+    private var sustainedWakeLock: PowerManager.WakeLock? = null
+
+    /**
+     * Held for the full recording session on devices without a wake-up step sensor.
+     */
+    private fun acquireSustainedWakeLock() {
+        synchronized(wakeLockLock) {
+            try {
+                if (sustainedWakeLock == null) {
+                    val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+                    sustainedWakeLock = pm.newWakeLock(
+                        PowerManager.PARTIAL_WAKE_LOCK,
+                        "OrientirNav:TrackingSustainedWakeLock"
+                    )
+                }
+                if (sustainedWakeLock?.isHeld == false) {
+                    sustainedWakeLock?.acquire()
+                    Log.d(TAG, "Sustained wake lock acquired (no wake-up step sensor)")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to acquire sustained wake lock", e)
+            }
+        }
+    }
+
+    private fun releaseSustainedWakeLock() {
+        synchronized(wakeLockLock) {
+            try {
+                if (sustainedWakeLock?.isHeld == true) {
+                    sustainedWakeLock?.release()
+                }
+            } catch (_: Exception) {}
+            sustainedWakeLock = null
+        }
+    }
+
     private fun acquireBriefWakeLock(timeoutMs: Long = 3000L) {
         synchronized(wakeLockLock) {
             try {
@@ -507,6 +554,7 @@ class TrackingService : Service() {
     private fun cleanup() {
         cancelCheckpointAlarm()
         releaseBriefWakeLock()
+        releaseSustainedWakeLock()
         try {
             locationTracker.stopListening()
             orientationManager.stop()
