@@ -198,6 +198,10 @@ class TrackingService : Service() {
             acquireSustainedWakeLock()
         }
 
+        if (!stepDetectorManager.hasActivityRecognitionPermission()) {
+            Log.w(TAG, "ACTIVITY_RECOGNITION not granted - step sensor will report nothing")
+        }
+
         // 1. Subscribe to orientation changes -> feeds current azimuth to PDR
         serviceScope.launch {
             orientationManager.orientationData.collect { orientation ->
@@ -619,7 +623,12 @@ class TrackingService : Service() {
         // events still arriving while the CPU sleeps?
         val steps = stepDetectorManager.pdrState.value.totalSteps
         val pending = stepDetectorManager.inMemoryAccumulatedSteps
-        val sensorKind = if (stepDetectorManager.hasWakeUpStepSensor) "wake" else "nowake"
+        val sensorKind = when {
+            !stepDetectorManager.hasActivityRecognitionPermission() -> "НЕТ РАЗРЕШЕНИЯ"
+            !stepDetectorManager.hasStepSensor -> "акселерометр"
+            stepDetectorManager.hasWakeUpStepSensor -> "wake"
+            else -> "nowake"
+        }
         val gpsLive = locationTracker.gpsStatus.value == GpsStatus.ACTIVE
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
