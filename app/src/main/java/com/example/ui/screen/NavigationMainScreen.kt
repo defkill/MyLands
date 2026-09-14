@@ -67,6 +67,13 @@ fun NavigationMainScreen(
     val visibleTrackIds by viewModel.visibleTrackIds.collectAsStateWithLifecycle()
     val savedTrackPoints by viewModel.visibleTrackPoints.collectAsStateWithLifecycle()
     val showRawTracks by viewModel.showRawTracks.collectAsStateWithLifecycle()
+    val isPositionEstimated by viewModel.isPositionEstimated.collectAsStateWithLifecycle()
+
+    // Best available position: a live fix when there is one, otherwise the step-counted
+    // estimate. Bearings and distances to waypoints stay useful with GPS switched off,
+    // which is exactly the situation this app exists for.
+    val effectiveLocation = gpsLocation ?: pdrState.lastEstimatedPosition
+    val blindDistanceMeters by viewModel.blindDistanceMeters.collectAsStateWithLifecycle()
     val selectedWaypoint by viewModel.selectedWaypoint.collectAsStateWithLifecycle()
     val candidatePoint by viewModel.candidatePoint.collectAsStateWithLifecycle()
     val activeMapTool by viewModel.activeMapTool.collectAsStateWithLifecycle()
@@ -174,7 +181,7 @@ fun NavigationMainScreen(
                 zoom = mapZoom,
                 onCenterChanged = { viewModel.setMapCenter(it) },
                 onZoomChanged = { viewModel.setMapZoom(it) },
-                userLocation = gpsLocation,
+                userLocation = effectiveLocation,
                 orientationData = orientationData,
                 tileSource = activeTileSource,
                 tileManager = viewModel.tileManager,
@@ -651,7 +658,7 @@ fun NavigationMainScreen(
     if (showSavedWaypointsSheet) {
         SavedWaypointsSheet(
             waypoints = waypoints,
-            userLocation = gpsLocation,
+            userLocation = effectiveLocation,
             angleUnit = userPreferences.defaultAngleUnit,
             coordinateSystem = userPreferences.defaultCoordinateSystem,
             onSelectWaypoint = { wp ->
@@ -726,7 +733,7 @@ fun NavigationMainScreen(
     if (showSettlementSearchSheet) {
         SettlementSearchSheet(
             repository = viewModel.settlementRepository,
-            userLocation = gpsLocation,
+            userLocation = effectiveLocation,
             onSelectSettlement = { settlement ->
                 val pt = GeoPoint(settlement.latitude, settlement.longitude)
                 viewModel.setMapCenter(pt)
@@ -786,9 +793,11 @@ fun NavigationMainScreen(
     if (showCompassScreen) {
         CompassFullScreenDialog(
             orientationData = orientationData,
-            position = gpsLocation ?: pdrState.lastEstimatedPosition,
+            position = effectiveLocation,
             coordinateSystem = userPreferences.defaultCoordinateSystem,
             angleUnit = userPreferences.defaultAngleUnit,
+            isEstimated = isPositionEstimated,
+            blindDistanceMeters = blindDistanceMeters,
             onCreatePoint = { pt ->
                 viewModel.addWaypointAt(
                     name = "Точка ${System.currentTimeMillis() % 10000}",
