@@ -35,6 +35,7 @@ import com.example.map.OfflineMapFormat
 import com.example.map.TileSource
 import com.example.model.*
 import com.example.ui.components.*
+import kotlinx.coroutines.launch
 import com.example.ui.map.TacticalMapView
 import com.example.viewmodel.MainViewModel
 import java.io.File
@@ -62,6 +63,9 @@ fun NavigationMainScreen(
     val waypoints by viewModel.waypoints.collectAsStateWithLifecycle()
     val routes by viewModel.routes.collectAsStateWithLifecycle()
     val triangulationState by viewModel.triangulationState.collectAsStateWithLifecycle()
+    val tracks by viewModel.tracks.collectAsStateWithLifecycle()
+    val visibleTrackIds by viewModel.visibleTrackIds.collectAsStateWithLifecycle()
+    val savedTrackPoints by viewModel.visibleTrackPoints.collectAsStateWithLifecycle()
     val selectedWaypoint by viewModel.selectedWaypoint.collectAsStateWithLifecycle()
     val candidatePoint by viewModel.candidatePoint.collectAsStateWithLifecycle()
     val activeMapTool by viewModel.activeMapTool.collectAsStateWithLifecycle()
@@ -75,6 +79,7 @@ fun NavigationMainScreen(
     var showAddWaypointDialog by remember { mutableStateOf(false) }
     var showCompassScreen by remember { mutableStateOf(false) }
     var showTriangulationDialog by remember { mutableStateOf(false) }
+    var showTracksSheet by remember { mutableStateOf(false) }
     var editingWaypoint by remember { mutableStateOf<com.example.data.entity.WaypointEntity?>(null) }
     var showSavedWaypointsSheet by remember { mutableStateOf(false) }
     var showSettlementSearchSheet by remember { mutableStateOf(false) }
@@ -186,6 +191,7 @@ fun NavigationMainScreen(
                 routeBuilderState = routeBuilderState,
                 savedRoutes = routes,
                 triangulationState = triangulationState,
+                savedTrackPoints = savedTrackPoints,
                 activeTrackPoints = currentTrackPoints,
                 angleUnit = userPreferences.defaultAngleUnit
             )
@@ -532,22 +538,7 @@ fun NavigationMainScreen(
                 // Track Recording (Start / Stop Foreground Service)
                 val isRecording = (activeTrack != null && activeTrack!!.isActive) || viewModel.isTrackingServiceRunning.collectAsStateWithLifecycle().value
                 FloatingActionButton(
-                    onClick = {
-                        if (isRecording) {
-                            viewModel.stopTrackRecording()
-                            Toast.makeText(context, "Запись трека остановлена и сохранена", Toast.LENGTH_SHORT).show()
-                        } else {
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
-                            }
-                            if (!hasDismissedBatteryOptPrompt) {
-                                showBatteryOptimizationDialog = true
-                            } else {
-                                viewModel.startTrackRecording()
-                                Toast.makeText(context, "Фоновая запись трека запущена", Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                    },
+                    onClick = { showTracksSheet = true },
                     modifier = Modifier.size(48.dp).testTag("track_recording_button"),
                     containerColor = if (isRecording) Color(0xFFD32F2F) else Color(0xFF263238),
                     contentColor = Color.White
@@ -671,6 +662,61 @@ fun NavigationMainScreen(
             },
             onDismiss = { showSavedWaypointsSheet = false }
         )
+    }
+
+    // Recorded Tracks Bottom Sheet
+    if (showTracksSheet) {
+        val isRecordingNow = (activeTrack != null && activeTrack!!.isActive) ||
+            viewModel.isTrackingServiceRunning.collectAsStateWithLifecycle().value
+        val exportScope = rememberCoroutineScope()
+
+        ModalBottomSheet(
+            onDismissRequest = { showTracksSheet = false },
+            containerColor = Color(0xFF10151C)
+        ) {
+            TracksSheet(
+                tracks = tracks,
+                visibleTrackIds = visibleTrackIds,
+                isRecording = isRecordingNow,
+                onStartRecording = {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                    if (!hasDismissedBatteryOptPrompt) {
+                        showTracksSheet = false
+                        showBatteryOptimizationDialog = true
+                    } else {
+                        viewModel.startTrackRecording()
+                        Toast.makeText(context, "Фоновая запись трека запущена", Toast.LENGTH_SHORT).show()
+                    }
+                },
+                onStopRecording = {
+                    viewModel.stopTrackRecording()
+                    Toast.makeText(context, "Запись трека остановлена и сохранена", Toast.LENGTH_SHORT).show()
+                },
+                onToggleVisibility = { viewModel.toggleTrackVisibility(it) },
+                onCenterOnTrack = {
+                    viewModel.centerOnTrack(it)
+                    showTracksSheet = false
+                },
+                onRename = { track, newName -> viewModel.renameTrack(track, newName) },
+                onDelete = {
+                    viewModel.deleteTrack(it)
+                    Toast.makeText(context, "Трек удалён", Toast.LENGTH_SHORT).show()
+                },
+                onShare = { track ->
+                    exportScope.launch {
+                        val file = viewModel.exportTrackToGpxFile(track)
+                        if (file == null) {
+                            Toast.makeText(context, "В треке нет записанных точек", Toast.LENGTH_SHORT).show()
+                        } else {
+                            shareFile(context, file, "application/gpx+xml", "Отправить трек")
+                        }
+                    }
+                },
+                onDismiss = { showTracksSheet = false }
+            )
+        }
     }
 
     // Settlement Search Bottom Sheet
