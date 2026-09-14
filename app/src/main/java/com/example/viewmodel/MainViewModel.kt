@@ -424,6 +424,71 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // --- Recorded tracks management ---
+
+    /** Ids of finished tracks the user chose to display on the map. */
+    private val _visibleTrackIds = MutableStateFlow<Set<Long>>(emptySet())
+    val visibleTrackIds: StateFlow<Set<Long>> = _visibleTrackIds.asStateFlow()
+
+    /** Points of every currently visible track, keyed by track id. */
+    private val _visibleTrackPoints = MutableStateFlow<Map<Long, List<TrackPointEntity>>>(emptyMap())
+    val visibleTrackPoints: StateFlow<Map<Long, List<TrackPointEntity>>> = _visibleTrackPoints.asStateFlow()
+
+    fun toggleTrackVisibility(track: TrackEntity) {
+        val current = _visibleTrackIds.value
+        if (current.contains(track.id)) {
+            _visibleTrackIds.value = current - track.id
+            _visibleTrackPoints.value = _visibleTrackPoints.value - track.id
+        } else {
+            _visibleTrackIds.value = current + track.id
+            viewModelScope.launch(Dispatchers.IO) {
+                val pts = repository.getTrackPointsSync(track.id)
+                _visibleTrackPoints.value = _visibleTrackPoints.value + (track.id to pts)
+            }
+        }
+    }
+
+    /** Centres the map on the first recorded point of a track. */
+    fun centerOnTrack(track: TrackEntity) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val pts = repository.getTrackPointsSync(track.id)
+            val first = pts.firstOrNull() ?: return@launch
+            _visibleTrackIds.value = _visibleTrackIds.value + track.id
+            _visibleTrackPoints.value = _visibleTrackPoints.value + (track.id to pts)
+            _mapCenter.value = GeoPoint(first.latitude, first.longitude, first.altitudeMeters)
+        }
+    }
+
+    fun renameTrack(track: TrackEntity, newName: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.updateTrack(track.copy(name = newName))
+        }
+    }
+
+    fun deleteTrack(track: TrackEntity) {
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.deleteTrack(track.id)
+            _visibleTrackIds.value = _visibleTrackIds.value - track.id
+            _visibleTrackPoints.value = _visibleTrackPoints.value - track.id
+        }
+    }
+
+    /**
+     * Writes a track to a GPX file in the app cache and returns it, so the UI can hand it to
+     * a share intent. Returns null when the track has no recorded points.
+     */
+    suspend fun exportTrackToGpxFile(track: TrackEntity): java.io.File? = withContext(Dispatchers.IO) {
+        val points = repository.getTrackPointsSync(track.id)
+        if (points.isEmpty()) return@withContext null
+
+        val xml = com.example.data.io.GpxKmlService.exportTrackGpx(track, points)
+        val safeName = track.name.replace(Regex("[^A-Za-z0-9А-Яа-яЇїІіЄєҐґ_\\-]"), "_")
+        val dir = java.io.File(getApplication<Application>().cacheDir, "exports").apply { mkdirs() }
+        val file = java.io.File(dir, "$safeName.gpx")
+        file.writeText(xml)
+        file
+    }
+
     // --- Navigation Tools: Triangulation (rays by azimuth + optional distance) ---
     private val _triangulationState = MutableStateFlow(TriangulationState())
     val triangulationState: StateFlow<TriangulationState> = _triangulationState.asStateFlow()
