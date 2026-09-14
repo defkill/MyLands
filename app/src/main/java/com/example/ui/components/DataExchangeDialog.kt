@@ -140,7 +140,7 @@ fun DataExchangeDialog(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Text(
-                    text = "Импорт/экспорт навигационных данных (GPX, KML) и подключение офлайн-карт (.mbtiles, .orntpack).",
+                    text = "Точки и маршруты — GPX/KML. Офлайн-карты — .mbtiles и .orntpack.",
                     color = Color(0xFFB0BEC5),
                     fontSize = 12.sp
                 )
@@ -229,7 +229,7 @@ fun DataExchangeDialog(
                 )
 
                 Text(
-                    text = "• MBTiles: база SQLite для сторонних растровых карт (QGIS, SAS).\n• .orntpack: архивы тайлов для обмена между приложениями.",
+                    text = "Поддерживаются .mbtiles (QGIS, SAS.Planet) и .orntpack — формат обмена между устройствами. Тип определяется автоматически.",
                     color = Color(0xFF90A4AE),
                     fontSize = 11.sp
                 )
@@ -294,34 +294,25 @@ fun DataExchangeDialog(
                 ) {
                     Icon(Icons.Default.AddLocationAlt, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Импортировать карту (.mbtiles / .orntpack)", fontWeight = FontWeight.Bold)
+                    Text("Импортировать карту", fontWeight = FontWeight.Bold)
                 }
 
-                // Format quick selection buttons
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    OutlinedButton(
-                        onClick = { importMapLauncher.launch(arrayOf("*/*")) },
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF81C784))
-                    ) {
-                        Icon(Icons.Default.Storage, contentDescription = null, modifier = Modifier.size(14.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(".mbtiles (SQLite)", fontSize = 11.sp)
-                    }
-
-                    OutlinedButton(
-                        onClick = { importMapLauncher.launch(arrayOf("*/*")) },
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFFFB74D))
-                    ) {
-                        Icon(Icons.Default.Unarchive, contentDescription = null, modifier = Modifier.size(14.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(".orntpack (ZIP)", fontSize = 11.sp)
-                    }
-                }
+                // Cache size readout: makes it obvious whether there is anything to pack.
+                val cacheStats = remember(isProcessing) { viewModel.tileManager.getCacheStats() }
+                Text(
+                    text = if (cacheStats.first == 0) {
+                        "Кэш пуст — карты сохраняются автоматически при просмотре онлайн."
+                    } else {
+                        String.format(
+                            java.util.Locale.US,
+                            "В кэше %d тайлов (%.1f МБ) — сохранены при просмотре карты онлайн.",
+                            cacheStats.first,
+                            cacheStats.second / 1024.0 / 1024.0
+                        )
+                    },
+                    color = Color(0xFF78909C),
+                    fontSize = 11.sp
+                )
 
                 // 5. Pack current tile cache to .orntpack
                 OutlinedButton(
@@ -349,7 +340,7 @@ fun DataExchangeDialog(
                 ) {
                     Icon(Icons.Default.Archive, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color(0xFFFFB74D))
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Собрать кэш в .orntpack")
+                    Text("Собрать кэш карт в файл и отправить")
                 }
             }
         },
@@ -381,7 +372,8 @@ private fun getFileName(context: Context, uri: Uri): String {
     return name ?: "imported_map"
 }
 
-private fun shareFile(context: Context, file: File, mimeType: String, chooserTitle: String) {
+/** Shared by the data-exchange and track screens to hand a generated file to another app. */
+internal fun shareFile(context: Context, file: File, mimeType: String, chooserTitle: String) {
     val authority = "${context.packageName}.fileprovider"
     val contentUri = FileProvider.getUriForFile(context, authority, file)
     val shareIntent = Intent(Intent.ACTION_SEND).apply {
