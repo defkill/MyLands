@@ -18,6 +18,22 @@ import com.example.viewmodel.MainViewModel
 class MainActivity : ComponentActivity() {
   private val viewModel: MainViewModel by viewModels()
 
+  override fun onResume() {
+    super.onResume()
+    // The user may have toggled GPS (or granted the permission) while the app was in the
+    // background; re-check on every return so the map is not stuck without a position.
+    val hasPermission = ContextCompat.checkSelfPermission(
+      this, Manifest.permission.ACCESS_FINE_LOCATION
+    ) == PackageManager.PERMISSION_GRANTED ||
+      ContextCompat.checkSelfPermission(
+        this, Manifest.permission.ACCESS_COARSE_LOCATION
+      ) == PackageManager.PERMISSION_GRANTED
+
+    if (hasPermission) {
+      viewModel.locationTracker.syncProviders()
+    }
+  }
+
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     enableEdgeToEdge()
