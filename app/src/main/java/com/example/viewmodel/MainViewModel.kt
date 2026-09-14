@@ -132,6 +132,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * coroutines started in init read this flag. Declaring it further down left it null at
      * that moment and crashed the app on launch.
      */
+    /**
+     * Metres walked by dead reckoning since the last real GPS fix. Surfaced in the UI so the
+     * user can judge how much error has accumulated: PDR drifts roughly 5-10% of distance.
+     */
+    private val _blindDistanceMeters = MutableStateFlow(0.0)
+    val blindDistanceMeters: StateFlow<Double> = _blindDistanceMeters.asStateFlow()
+
+    /** True when the displayed position comes from step counting rather than a live fix. */
+    private val _isPositionEstimated = MutableStateFlow(false)
+    val isPositionEstimated: StateFlow<Boolean> = _isPositionEstimated.asStateFlow()
+
     private val _showRawTracks = MutableStateFlow(false)
     val showRawTracks: StateFlow<Boolean> = _showRawTracks.asStateFlow()
 
@@ -174,6 +185,66 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             orientationData.collect { o ->
                 stepDetectorManager.updateCurrentHeading(o.trueHeadingDeg)
+            }
+        }
+
+        // When the fix disappears, hand the last known position to the step counter as its
+        // anchor. Without this the estimator has nothing to count from and the compass and
+        // waypoint bearings go blank the moment GPS is lost — the opposite of what is needed.
+        viewModelScope.launch {
+            gpsStatus.collect { status ->
+                val live = status == GpsStatus.ACTIVE
+                _isPositionEstimated.value = !live
+
+                if (!live) {
+                    val anchor = locationTracker.lastFixBeforeSignalLoss.value
+                        ?: gpsLocation.value
+                        ?: pdrState.value.lastEstimatedPosition
+                    if (anchor != null) {
+                        stepDetectorManager.updateGpsAnchor(anchor)
+                        stepDetectorManager.setDeadReckoningActive(true)
+                    }
+                } else {
+                    _blindDistanceMeters.value = 0.0
+                }
+            }
+        }
+
+        // Track how far we have walked blind, for the accuracy hint in the UI.
+        viewModelScope.launch {
+            pdrState.collect { pdr ->
+                if (_isPositionEstimated.value) {
+                    _blindDistanceMeters.value = pdr.totalDistanceMeters
+                }
+            }
+        }
+
+        // Persist dead-reckoning points. TrackingService does this in the background, but when
+        // it is not the one recording, nothing was writing them at all: switching GPS off mid
+        // track produced a straight line across the whole blind section instead of the path.
+        stepDetectorManager.onStepFlushed = { flushed ->
+            viewModelScope.launch(Dispatchers.IO) {
+                if (isTrackingServiceRunning.value && serviceRecordedPointsCount.value > 0) {
+                    return@launch
+                }
+                val track = activeTrack.value ?: return@launch
+                if (!track.isActive) return@launch
+
+                repository.recordTrackPoint(
+                    TrackPointEntity(
+                        trackId = track.id,
+                        latitude = flushed.point.latitude,
+                        longitude = flushed.point.longitude,
+                        altitudeMeters = null,
+                        source = TrackPointEntity.SOURCE_DEAD_RECKONING,
+                        headingDegrees = flushed.headingDeg,
+                        speedMps = null,
+                        accuracyMeters = null,
+                        timestamp = flushed.timestamp
+                    )
+                )
+                val filtered = TrackFilter.filter(repository.getTrackPointsSync(track.id))
+                repository.updateTrack(track.copy(totalDistanceMeters = filtered.distanceMeters))
             }
         }
 
