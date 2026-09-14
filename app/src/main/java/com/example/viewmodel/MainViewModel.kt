@@ -34,6 +34,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val database = AppDatabase.getInstance(application)
@@ -164,18 +165,75 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        // Watch active track points
+        // Watch active track points.
+        // flatMapLatest is required here: collecting the inner points flow directly inside
+        // activeTrack.collect never returns, so the outer flow would stop seeing new tracks
+        // after the first one (second recording showed no line at all).
         viewModelScope.launch {
-            activeTrack.collect { track ->
-                if (track != null) {
-                    repository.getTrackPoints(track.id).collect { pts ->
-                        _currentTrackPoints.value = pts
+            activeTrack
+                .flatMapLatest { track ->
+                    if (track != null) repository.getTrackPoints(track.id) else flowOf(emptyList())
+                }
+                .collect { pts -> _currentTrackPoints.value = pts }
+        }
+
+        // Foreground fallback recorder.
+        //
+        // Points are normally written by TrackingService. If that service fails to start
+        // (OEM restrictions, denied notification permission, FGS launch restrictions), the
+        // track row still exists and the UI says "recording" while nothing is ever saved.
+        // While the app is in the foreground we have a working GPS stream right here, so
+        // record from it too whenever the service is NOT running. The distance gate also
+        // keeps the database from filling with near-identical points while standing still.
+        viewModelScope.launch {
+            gpsLocation.collect { loc ->
+                if (loc == null) return@collect
+                if (isTrackingServiceRunning.value) return@collect
+
+                val track = activeTrack.value ?: return@collect
+                if (!track.isActive) return@collect
+
+                val last = _currentTrackPoints.value.lastOrNull()
+                val movedEnough = last == null || GeodesyEngine.distanceMeters(
+                    last.latitude, last.longitude, loc.latitude, loc.longitude
+                ) >= MIN_TRACK_POINT_DISTANCE_METERS
+
+                if (movedEnough) {
+                    withContext(Dispatchers.IO) {
+                        repository.recordTrackPoint(
+                            TrackPointEntity(
+                                trackId = track.id,
+                                latitude = loc.latitude,
+                                longitude = loc.longitude,
+                                altitudeMeters = loc.altitude,
+                                source = TrackPointEntity.SOURCE_GPS,
+                                headingDegrees = loc.bearingDeg
+                                    ?: orientationManager.orientationData.value.trueHeadingDeg,
+                                speedMps = loc.speedMps,
+                                accuracyMeters = loc.accuracy,
+                                timestamp = loc.timestamp
+                            )
+                        )
+                        // Keep the running distance current so the tracks list is not stuck at 0.00 km.
+                        repository.updateTrack(
+                            track.copy(
+                                totalDistanceMeters = track.totalDistanceMeters +
+                                    (last?.let {
+                                        GeodesyEngine.distanceMeters(
+                                            it.latitude, it.longitude, loc.latitude, loc.longitude
+                                        )
+                                    } ?: 0.0)
+                            )
+                        )
                     }
-                } else {
-                    _currentTrackPoints.value = emptyList()
                 }
             }
         }
+    }
+
+    private companion object {
+        /** Minimum spacing between recorded GPS points, in metres. */
+        const val MIN_TRACK_POINT_DISTANCE_METERS = 5.0
     }
 
     override fun onCleared() {
