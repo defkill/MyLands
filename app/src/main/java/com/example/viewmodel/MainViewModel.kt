@@ -188,7 +188,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             gpsLocation.collect { loc ->
                 if (loc == null) return@collect
-                if (isTrackingServiceRunning.value) return@collect
+
+                // Normally the service owns recording. But if it claims to be running while
+                // never persisting anything (its own GPS registration failed, OEM killed its
+                // callbacks, ...), take over rather than let the user walk with an empty track.
+                val serviceIsRecording = isTrackingServiceRunning.value &&
+                    serviceRecordedPointsCount.value > 0
+                if (serviceIsRecording) return@collect
 
                 val track = activeTrack.value ?: return@collect
                 if (!track.isActive) return@collect
