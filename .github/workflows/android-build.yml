@@ -11,6 +11,12 @@ on:
       - develop
   workflow_dispatch:
 
+# Uploading files to GitHub one at a time triggers a run per file. Cancel the superseded
+# ones so only the latest push actually builds instead of queueing a pile of runners.
+concurrency:
+  group: android-build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
