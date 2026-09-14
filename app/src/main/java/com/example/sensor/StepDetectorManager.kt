@@ -131,6 +131,16 @@ class StepDetectorManager(
         )
     }
 
+    /**
+     * Marks whether positions are currently being estimated from steps rather than GPS, so the
+     * UI can label them as approximate.
+     */
+    fun setDeadReckoningActive(active: Boolean) {
+        if (_pdrState.value.isDeadReckoningActive != active) {
+            _pdrState.value = _pdrState.value.copy(isDeadReckoningActive = active)
+        }
+    }
+
     fun resetSteps() {
         accumulatedDx = 0.0
         accumulatedDy = 0.0
