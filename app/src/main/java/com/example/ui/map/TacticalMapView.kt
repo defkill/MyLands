@@ -53,6 +53,7 @@ fun TacticalMapView(
     routeBuilderState: RouteBuilderState,
     savedRoutes: List<RouteEntity> = emptyList(),
     triangulationState: TriangulationState = TriangulationState(),
+    savedTrackPoints: Map<Long, List<TrackPointEntity>> = emptyMap(),
     activeTrackPoints: List<TrackPointEntity>,
     angleUnit: AngleUnit,
     modifier: Modifier = Modifier
@@ -198,6 +199,11 @@ fun TacticalMapView(
         drawMilitaryGrid(center, zoom, width, height)
 
         // 3. Draw Recorded Tracks
+        // Previously recorded tracks the user chose to display, drawn under the active one.
+        savedTrackPoints.values.forEach { pts ->
+            drawTrackPoints(pts, center, zoom, width, height)
+        }
+
         drawTrackPoints(activeTrackPoints, center, zoom, width, height)
 
         // 4a. Draw all saved routes (persisted polylines)
