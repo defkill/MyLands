@@ -66,6 +66,7 @@ fun NavigationMainScreen(
     val tracks by viewModel.tracks.collectAsStateWithLifecycle()
     val visibleTrackIds by viewModel.visibleTrackIds.collectAsStateWithLifecycle()
     val savedTrackPoints by viewModel.visibleTrackPoints.collectAsStateWithLifecycle()
+    val showRawTracks by viewModel.showRawTracks.collectAsStateWithLifecycle()
     val selectedWaypoint by viewModel.selectedWaypoint.collectAsStateWithLifecycle()
     val candidatePoint by viewModel.candidatePoint.collectAsStateWithLifecycle()
     val activeMapTool by viewModel.activeMapTool.collectAsStateWithLifecycle()
@@ -678,6 +679,8 @@ fun NavigationMainScreen(
                 tracks = tracks,
                 visibleTrackIds = visibleTrackIds,
                 isRecording = isRecordingNow,
+                showRawTracks = showRawTracks,
+                onToggleRawTracks = { viewModel.toggleRawTracks() },
                 onStartRecording = {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                         notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
