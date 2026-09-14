@@ -120,6 +120,14 @@ class NavigationRepository(private val database: AppDatabase) {
         return trackDao.getTrackPoints(trackId)
     }
 
+    suspend fun getTrackPointsSync(trackId: Long): List<TrackPointEntity> {
+        return trackDao.getTrackPointsSync(trackId)
+    }
+
+    suspend fun updateTrack(track: TrackEntity) {
+        trackDao.updateTrack(track)
+    }
+
     suspend fun deleteTrack(id: Long) {
         trackDao.deleteTrackById(id)
     }
