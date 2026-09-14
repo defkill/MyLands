@@ -40,6 +40,8 @@ fun TracksSheet(
     tracks: List<TrackEntity>,
     visibleTrackIds: Set<Long>,
     isRecording: Boolean,
+    showRawTracks: Boolean,
+    onToggleRawTracks: () -> Unit,
     onStartRecording: () -> Unit,
     onStopRecording: () -> Unit,
     onToggleVisibility: (TrackEntity) -> Unit,
@@ -103,7 +105,43 @@ fun TracksSheet(
                 )
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // GPS outlier filtering. Filtering is display-only: the raw recording is never
+            // modified, so this switch can always show exactly what the receiver reported.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = if (showRawTracks) "Сырой трек (без фильтра)" else "Фильтр выбросов GPS",
+                        color = Color.White,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = if (showRawTracks) {
+                            "Показаны все точки, включая скачки приёмника"
+                        } else {
+                            "Скачки GPS скрыты, расстояние считается по очищенному пути"
+                        },
+                        color = Color(0xFF78909C),
+                        fontSize = 11.sp
+                    )
+                }
+                Switch(
+                    checked = !showRawTracks,
+                    onCheckedChange = { onToggleRawTracks() },
+                    modifier = Modifier.testTag("raw_tracks_switch"),
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color(0xFF69F0AE),
+                        checkedTrackColor = Color(0xFF1B5E20)
+                    )
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
 
             if (tracks.isEmpty()) {
                 Text(
