@@ -43,6 +43,15 @@ jobs:
           gradle wrapper --gradle-version 9.3.1
           chmod +x ./gradlew
 
+      # app/build.gradle.kts declares a custom "debugConfig" signing config pointing at
+      # debug.keystore in the project root, and that file is not committed — so it has to
+      # be created here or :app:validateSigningDebug fails.
+      - name: Generate debug keystore
+        run: |
+          keytool -genkey -v -keystore debug.keystore -storepass android \
+            -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 \
+            -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+
       # Build the APK first, so a usable artifact exists even if lint or tests fail later.
       - name: Build Debug APK
         run: ./gradlew assembleDebug
