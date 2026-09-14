@@ -85,10 +85,6 @@ class StepDetectorManager(
      */
     val hasWakeUpStepSensor: Boolean get() = wakeUpStepSensor != null
 
-    private companion object {
-        const val TAG = "StepDetectorManager"
-    }
-
     private val _pdrState = MutableStateFlow(PdrState())
     val pdrState: StateFlow<PdrState> = _pdrState.asStateFlow()
 
@@ -347,6 +343,8 @@ class StepDetectorManager(
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
     companion object {
+        private const val TAG = "StepDetectorManager"
+
         /**
          * Calculates angular difference [0..180] degrees between two azimuths.
          */
