@@ -44,6 +44,7 @@ fun TracksSheet(
     serviceRunning: Boolean,
     servicePointCount: Int,
     hasWakeUpStepSensor: Boolean,
+    hasActivityPermission: Boolean,
     onToggleRawTracks: () -> Unit,
     onStartRecording: () -> Unit,
     onStopRecording: () -> Unit,
@@ -126,12 +127,15 @@ fun TracksSheet(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = if (hasWakeUpStepSensor) {
-                                "Датчик шагов будит процессор — запись идёт с выключенным экраном"
-                            } else {
-                                "Нет пробуждающего датчика шагов — процессор удерживается включённым, расход батареи выше"
+                            text = when {
+                                !hasActivityPermission ->
+                                    "Нет разрешения на распознавание активности — шаги не считаются, трек без GPS писаться не будет"
+                                hasWakeUpStepSensor ->
+                                    "Датчик шагов будит процессор — запись идёт с выключенным экраном"
+                                else ->
+                                    "Нет пробуждающего датчика шагов — процессор удерживается включённым, расход батареи выше"
                             },
-                            color = Color(0xFF78909C),
+                            color = if (!hasActivityPermission) Color(0xFFEF9A9A) else Color(0xFF78909C),
                             fontSize = 10.sp
                         )
                         if (!serviceRunning) {
