@@ -6,6 +6,8 @@ import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
 import android.os.Bundle
+import android.os.Looper
+import android.util.Log
 import com.example.model.GeoPoint
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -19,6 +21,10 @@ enum class GpsStatus(val label: String) {
 }
 
 class LocationTracker(private val context: Context) : LocationListener {
+
+    private companion object {
+        const val TAG = "LocationTracker"
+    }
 
     private val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
 
@@ -53,13 +59,22 @@ class LocationTracker(private val context: Context) : LocationListener {
                 updateFromLocation(best)
             }
 
-            // Register GPS updates: 1 second interval, 1 meter minimum distance
+            // Register GPS updates: 1 second interval, 1 meter minimum distance.
+            //
+            // The explicit Looper is essential: the overload without one uses the CALLING
+            // thread's Looper and throws when there is none. TrackingService starts this from
+            // a background coroutine, so without this the registration failed silently in the
+            // catch below and the service never received a single fix (track stayed empty
+            // while the UI happily reported "recording").
+            val looper = Looper.getMainLooper()
+
             if (isGpsEnabled) {
                 locationManager.requestLocationUpdates(
                     LocationManager.GPS_PROVIDER,
                     1000L,
                     1.0f,
-                    this
+                    this,
+                    looper
                 )
             }
             if (locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
@@ -67,14 +82,18 @@ class LocationTracker(private val context: Context) : LocationListener {
                     LocationManager.NETWORK_PROVIDER,
                     2000L,
                     5.0f,
-                    this
+                    this,
+                    looper
                 )
             }
             isListening = true
         } catch (e: SecurityException) {
             _gpsStatus.value = GpsStatus.NO_PERMISSION
-        } catch (_: Exception) {
+            Log.e(TAG, "Location permission missing", e)
+        } catch (e: Exception) {
             _gpsStatus.value = GpsStatus.SEARCHING
+            // Never swallow this silently again: a failure here means no track is recorded.
+            Log.e(TAG, "Failed to register location updates", e)
         }
     }
 
