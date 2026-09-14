@@ -11,6 +11,7 @@ import android.location.LocationManager
 import android.os.Bundle
 import android.os.Looper
 import android.util.Log
+import androidx.core.content.ContextCompat
 import com.example.model.GeoPoint
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -159,9 +160,14 @@ class LocationTracker(private val context: Context) : LocationListener {
     private fun registerProvidersReceiver() {
         if (receiverRegistered) return
         try {
-            context.registerReceiver(
+            // targetSdk 34+ requires the exported flag explicitly; ContextCompat picks the
+            // right call for the running OS version. NOT_EXPORTED: this is a system broadcast
+            // we only listen to, nothing else should be able to send it to us.
+            ContextCompat.registerReceiver(
+                context,
                 providersChangedReceiver,
-                IntentFilter(LocationManager.PROVIDERS_CHANGED_ACTION)
+                IntentFilter(LocationManager.PROVIDERS_CHANGED_ACTION),
+                ContextCompat.RECEIVER_NOT_EXPORTED
             )
             receiverRegistered = true
         } catch (e: Exception) {
