@@ -2,6 +2,7 @@ package com.example
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -49,6 +50,15 @@ class MainActivity : ComponentActivity() {
           }
         }
 
+        val activityRecognitionLauncher = rememberLauncherForActivityResult(
+          contract = ActivityResultContracts.RequestPermission()
+        ) { granted ->
+          if (granted) {
+            // Re-register the step sensor: the earlier registration produced no events.
+            viewModel.stepDetectorManager.restart()
+          }
+        }
+
         LaunchedEffect(Unit) {
           val hasFine = ContextCompat.checkSelfPermission(
             this@MainActivity,
@@ -58,6 +68,19 @@ class MainActivity : ComponentActivity() {
             this@MainActivity,
             Manifest.permission.ACCESS_COARSE_LOCATION
           ) == PackageManager.PERMISSION_GRANTED
+
+          // Step sensors deliver nothing without ACTIVITY_RECOGNITION on Android 10+.
+          // It is declared in the manifest but is a runtime permission, and nobody was asking
+          // for it — so registerListener succeeded silently and zero step events ever arrived,
+          // which is why dead reckoning produced no track at all.
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            ContextCompat.checkSelfPermission(
+              this@MainActivity,
+              Manifest.permission.ACTIVITY_RECOGNITION
+            ) != PackageManager.PERMISSION_GRANTED
+          ) {
+            activityRecognitionLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION)
+          }
 
           if (hasFine || hasCoarse) {
             // Permission was already granted on a previous run: start immediately.
