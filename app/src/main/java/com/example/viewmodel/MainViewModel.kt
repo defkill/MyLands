@@ -12,6 +12,7 @@ import com.example.data.entity.TrackEntity
 import com.example.data.entity.TrackPointEntity
 import com.example.data.entity.WaypointEntity
 import com.example.data.repository.NavigationRepository
+import com.example.data.track.TrackFilter
 import com.example.geodesy.GeodesyEngine
 import com.example.map.MapProjection
 import com.example.map.MbtilesTileSource
@@ -174,7 +175,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 .flatMapLatest { track ->
                     if (track != null) repository.getTrackPoints(track.id) else flowOf(emptyList())
                 }
-                .collect { pts -> _currentTrackPoints.value = pts }
+                .collect { pts ->
+                    _currentTrackPoints.value = TrackFilter.filter(pts, !_showRawTracks.value).points
+                }
         }
 
         // Foreground fallback recorder.
@@ -199,6 +202,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val track = activeTrack.value ?: return@collect
                 if (!track.isActive) return@collect
 
+                // Hopeless fixes are not worth storing at all: they cannot be salvaged later
+                // and only add noise. Everything milder is kept raw and cleaned at display time.
+                val accuracy = loc.accuracy
+                if (accuracy != null && accuracy > UNUSABLE_ACCURACY_METERS) return@collect
+
                 val last = _currentTrackPoints.value.lastOrNull()
                 val movedEnough = last == null || GeodesyEngine.distanceMeters(
                     last.latitude, last.longitude, loc.latitude, loc.longitude
@@ -220,16 +228,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 timestamp = loc.timestamp
                             )
                         )
-                        // Keep the running distance current so the tracks list is not stuck at 0.00 km.
+
+                        // Recompute over the filtered path rather than adding each leg as it
+                        // arrives: a single GPS jump would otherwise permanently inflate the
+                        // total by kilometres even once the outlier is filtered out of the map.
+                        val filtered = TrackFilter.filter(repository.getTrackPointsSync(track.id))
                         repository.updateTrack(
-                            track.copy(
-                                totalDistanceMeters = track.totalDistanceMeters +
-                                    (last?.let {
-                                        GeodesyEngine.distanceMeters(
-                                            it.latitude, it.longitude, loc.latitude, loc.longitude
-                                        )
-                                    } ?: 0.0)
-                            )
+                            track.copy(totalDistanceMeters = filtered.distanceMeters)
                         )
                     }
                 }
@@ -240,6 +245,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private companion object {
         /** Minimum spacing between recorded GPS points, in metres. */
         const val MIN_TRACK_POINT_DISTANCE_METERS = 5.0
+
+        /** Fixes worse than this carry no usable information and are dropped on the spot. */
+        const val UNUSABLE_ACCURACY_METERS = 100.0f
     }
 
     override fun onCleared() {
@@ -271,11 +279,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val next = !_isFollowingLocation.value
         _isFollowingLocation.value = next
 
-        // Safety net: if updates were never registered (permission granted later from
-        // system settings, GPS switched on after launch, provider was disabled at start),
-        // retry here instead of silently doing nothing when the user taps the button.
-        if (next && !locationTracker.isActive()) {
-            locationTracker.startListening()
+        // Safety net: re-sync providers whenever the user asks to be located. Covers
+        // permission granted later from system settings, GPS switched on after launch, or
+        // only the network provider having been registered because GPS was off at start.
+        if (next && (!locationTracker.isActive() || !locationTracker.isGpsRegistered())) {
+            locationTracker.syncProviders()
         }
 
         if (next && gpsLocation.value != null) {
@@ -490,6 +498,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // --- Recorded tracks management ---
 
+    /**
+     * When true the map shows the unfiltered recording, including GPS outliers.
+     * Off by default; the filter never alters what is stored.
+     */
+    private val _showRawTracks = MutableStateFlow(false)
+    val showRawTracks: StateFlow<Boolean> = _showRawTracks.asStateFlow()
+
+    fun toggleRawTracks() {
+        _showRawTracks.value = !_showRawTracks.value
+        // Re-apply filtering to everything currently displayed.
+        viewModelScope.launch(Dispatchers.IO) {
+            val refreshed = _visibleTrackIds.value.associateWith { id ->
+                TrackFilter.filter(repository.getTrackPointsSync(id), !_showRawTracks.value).points
+            }
+            _visibleTrackPoints.value = refreshed
+        }
+    }
+
     /** Ids of finished tracks the user chose to display on the map. */
     private val _visibleTrackIds = MutableStateFlow<Set<Long>>(emptySet())
     val visibleTrackIds: StateFlow<Set<Long>> = _visibleTrackIds.asStateFlow()
@@ -506,7 +532,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         } else {
             _visibleTrackIds.value = current + track.id
             viewModelScope.launch(Dispatchers.IO) {
-                val pts = repository.getTrackPointsSync(track.id)
+                val pts = TrackFilter.filter(
+                    repository.getTrackPointsSync(track.id),
+                    !_showRawTracks.value
+                ).points
                 _visibleTrackPoints.value = _visibleTrackPoints.value + (track.id to pts)
             }
         }
@@ -515,7 +544,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Centres the map on the first recorded point of a track. */
     fun centerOnTrack(track: TrackEntity) {
         viewModelScope.launch(Dispatchers.IO) {
-            val pts = repository.getTrackPointsSync(track.id)
+            val pts = TrackFilter.filter(
+                repository.getTrackPointsSync(track.id),
+                !_showRawTracks.value
+            ).points
             val first = pts.firstOrNull() ?: return@launch
             _visibleTrackIds.value = _visibleTrackIds.value + track.id
             _visibleTrackPoints.value = _visibleTrackPoints.value + (track.id to pts)
@@ -542,7 +574,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * a share intent. Returns null when the track has no recorded points.
      */
     suspend fun exportTrackToGpxFile(track: TrackEntity): java.io.File? = withContext(Dispatchers.IO) {
-        val points = repository.getTrackPointsSync(track.id)
+        val points = TrackFilter.filter(
+            repository.getTrackPointsSync(track.id),
+            !_showRawTracks.value
+        ).points
         if (points.isEmpty()) return@withContext null
 
         val xml = com.example.data.io.GpxKmlService.exportTrackGpx(track, points)
