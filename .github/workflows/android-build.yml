@@ -33,9 +33,15 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: 9.3.1
 
-      - name: Make gradlew executable
-        run: chmod +x ./gradlew
+      # gradle-wrapper.jar is not committed to this repository, so ./gradlew cannot run
+      # until the wrapper is regenerated here. Keep this step unless the jar is added.
+      - name: Generate Gradle wrapper
+        run: |
+          gradle wrapper --gradle-version 9.3.1
+          chmod +x ./gradlew
 
       # Build the APK first, so a usable artifact exists even if lint or tests fail later.
       - name: Build Debug APK
