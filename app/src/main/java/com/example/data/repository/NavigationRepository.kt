@@ -6,6 +6,7 @@ import com.example.data.entity.RouteLeg
 import com.example.data.entity.TrackEntity
 import com.example.data.entity.TrackPointEntity
 import com.example.data.entity.WaypointEntity
+import com.example.data.track.TrackFilter
 import com.example.geodesy.GeodesyEngine
 import kotlinx.coroutines.flow.Flow
 
@@ -94,13 +95,10 @@ class NavigationRepository(private val database: AppDatabase) {
     suspend fun stopCurrentTrack() {
         val currentActive = trackDao.getActiveTrackSync() ?: return
         val points = trackDao.getTrackPointsSync(currentActive.id)
-        var totalDist = 0.0
-        for (i in 0 until points.size - 1) {
-            totalDist += GeodesyEngine.distanceMeters(
-                points[i].latitude, points[i].longitude,
-                points[i + 1].latitude, points[i + 1].longitude
-            )
-        }
+
+        // Measure the cleaned path: a single GPS jump would otherwise report kilometres
+        // that were never walked. Raw points stay in the database untouched.
+        val totalDist = TrackFilter.filter(points).distanceMeters
         val hasDr = points.any { it.source == TrackPointEntity.SOURCE_DEAD_RECKONING }
         trackDao.updateTrack(
             currentActive.copy(
