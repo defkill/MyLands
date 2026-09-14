@@ -1,4 +1,7 @@
 package com.example.sensor
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 
 import android.content.Context
 import android.hardware.Sensor
@@ -6,6 +9,7 @@ import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.util.Log
+import androidx.core.content.ContextCompat
 import com.example.geodesy.GeodesyEngine
 import com.example.model.GeoPoint
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -85,6 +89,21 @@ class StepDetectorManager(
      */
     val hasWakeUpStepSensor: Boolean get() = wakeUpStepSensor != null
 
+    /** A hardware step detector exists on this device (wake-up or not). */
+    val hasStepSensor: Boolean get() = stepSensor != null
+
+    /**
+     * ACTIVITY_RECOGNITION is required from Android 10 for step sensors to report anything.
+     * Registration succeeds without it, but no events are ever delivered.
+     */
+    fun hasActivityRecognitionPermission(): Boolean =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.ACTIVITY_RECOGNITION
+            ) == PackageManager.PERMISSION_GRANTED
+        } else true
+
     private val _pdrState = MutableStateFlow(PdrState())
     val pdrState: StateFlow<PdrState> = _pdrState.asStateFlow()
 
@@ -126,6 +145,17 @@ class StepDetectorManager(
                 sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
             }
         }
+    }
+
+    /**
+     * Re-registers sensor listeners. Needed after ACTIVITY_RECOGNITION is granted: the earlier
+     * registration was accepted but delivered no events, and the sensor only starts reporting
+     * once we subscribe again with the permission in place.
+     */
+    fun restart() {
+        val keepAnchor = anchorPosition
+        sensorManager.unregisterListener(this)
+        start(keepAnchor)
     }
 
     fun stop() {
