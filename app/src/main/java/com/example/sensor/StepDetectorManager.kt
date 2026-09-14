@@ -5,6 +5,7 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.util.Log
 import com.example.geodesy.GeodesyEngine
 import com.example.model.GeoPoint
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -60,8 +61,33 @@ class StepDetectorManager(
 ) : SensorEventListener {
 
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
-    private val stepSensor = sensorManager.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR)
-    private val accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+    /**
+     * Wake-up step detector if the device has one.
+     *
+     * getDefaultSensor(type) returns the NON-wake-up variant: it stops delivering events once
+     * the CPU suspends, which is exactly what happens with the phone locked in a pocket. The
+     * dead-reckoning track therefore died a minute after the screen went off. The two-argument
+     * overload asks for the wake-up sensor, which wakes the CPU for each step.
+     */
+    private val wakeUpStepSensor =
+        sensorManager.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR, true)
+
+    private val stepSensor = wakeUpStepSensor
+        ?: sensorManager.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR)
+
+    private val accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER, true)
+        ?: sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+
+    /**
+     * False when only non-wake-up sensors exist. In that case step events stop during deep
+     * sleep unless something else keeps the CPU awake, so the recording service must hold a
+     * wake lock for the whole session instead of brief per-event ones.
+     */
+    val hasWakeUpStepSensor: Boolean get() = wakeUpStepSensor != null
+
+    private companion object {
+        const val TAG = "StepDetectorManager"
+    }
 
     private val _pdrState = MutableStateFlow(PdrState())
     val pdrState: StateFlow<PdrState> = _pdrState.asStateFlow()
@@ -92,6 +118,10 @@ class StepDetectorManager(
 
     fun start(initialPosition: GeoPoint? = null) {
         anchorPosition = initialPosition
+        Log.d(
+            TAG,
+            "Starting PDR: stepSensor=${stepSensor?.name ?: "none"}, wakeUp=$hasWakeUpStepSensor"
+        )
         if (stepSensor != null) {
             sensorManager.registerListener(this, stepSensor, SensorManager.SENSOR_DELAY_FASTEST)
         } else {
