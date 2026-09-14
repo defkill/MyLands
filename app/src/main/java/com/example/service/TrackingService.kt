@@ -408,6 +408,11 @@ class TrackingService : Service() {
                 // this flushes them into an exact geodetic point and triggers onStepFlushed -> Room insert
                 stepDetectorManager.checkFlushTimeout(now)
             }
+
+            // Refresh the notification on every checkpoint, not only every 5th point: while
+            // dead reckoning the point count barely moves, so the diagnostics would otherwise
+            // stay frozen exactly during the phase we need to observe.
+            updateNotification(currentTrackName, _recordedPointsCount.value)
         } finally {
             scheduleNextCheckpointAlarm()
             releaseBriefWakeLock()
@@ -608,9 +613,25 @@ class TrackingService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        // Diagnostics live in the notification because the failure we are chasing happens with
+        // the screen off and the phone in a pocket: by the time the user can look at the app,
+        // whatever went wrong is over. Step count answers the key question directly — are step
+        // events still arriving while the CPU sleeps?
+        val steps = stepDetectorManager.pdrState.value.totalSteps
+        val pending = stepDetectorManager.inMemoryAccumulatedSteps
+        val sensorKind = if (stepDetectorManager.hasWakeUpStepSensor) "wake" else "nowake"
+        val gpsLive = locationTracker.gpsStatus.value == GpsStatus.ACTIVE
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Запись трека активна")
-            .setContentText("Точек: $pointsCount • $trackName (GPS + PDR)")
+            .setContentText("Точек: $pointsCount • $trackName")
+            .setStyle(
+                NotificationCompat.BigTextStyle().bigText(
+                    "Точек: $pointsCount • $trackName\n" +
+                        "Шагов: $steps (в буфере $pending) • датчик: $sensorKind\n" +
+                        "GPS: ${if (gpsLive) "есть" else "нет — счисление"}"
+                )
+            )
             .setSubText("Фоновая запись")
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
             .setOngoing(true)
