@@ -3,6 +3,7 @@ package com.example.map
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.util.Log
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -38,9 +39,22 @@ class TileManager(private val context: Context) {
          */
         const val TILE_USER_AGENT = "MyLands/1.0 (+https://github.com/defkill/MyLands)"
         const val TILE_REFERER = "https://github.com/defkill/MyLands"
+        private const val TAG = "TileManager"
     }
 
-    private val baseCacheDir = File(context.cacheDir, "map_tiles")
+    /**
+     * Tiles live in the app's files directory, NOT in cacheDir.
+     *
+     * Android is free to wipe cacheDir whenever storage runs low. Losing downloaded maps that
+     * way would be discovered in the field, with no connection to re-download them — the exact
+     * situation this app exists for. filesDir is only removed when the user uninstalls or
+     * clears app data.
+     */
+    private val baseCacheDir = File(context.filesDir, "map_tiles")
+
+    /** Previous location; kept only to move existing tiles over once. */
+    private val legacyCacheDir = File(context.cacheDir, "map_tiles")
+
     private var offlineZipFile: ZipFile? = null
     private var activeMbtilesSource: MbtilesTileSource? = null
 
@@ -50,10 +64,40 @@ class TileManager(private val context: Context) {
         if (!baseCacheDir.exists()) {
             baseCacheDir.mkdirs()
         }
+        migrateLegacyCacheIfNeeded()
     }
 
     /**
-     * Attaches an offline .orntpack or .zip tile package.
+     * Moves tiles downloaded by earlier versions out of cacheDir, so nobody loses maps they
+     * already have. Runs once: the old directory is removed afterwards.
+     */
+    private fun migrateLegacyCacheIfNeeded() {
+        try {
+            if (!legacyCacheDir.exists()) return
+
+            legacyCacheDir.walkTopDown()
+                .filter { it.isFile }
+                .forEach { file ->
+                    val target = File(baseCacheDir, file.relativeTo(legacyCacheDir).path)
+                    if (!target.exists()) {
+                        target.parentFile?.mkdirs()
+                        if (!file.renameTo(target)) {
+                            file.copyTo(target, overwrite = false)
+                        }
+                    }
+                }
+            legacyCacheDir.deleteRecursively()
+            Log.d(TAG, "Migrated tile storage from cacheDir to filesDir")
+        } catch (e: Exception) {
+            Log.e(TAG, "Tile storage migration failed", e)
+        }
+    }
+
+    /**
+     * Attaches an offline .orntpack or .zip tile package read-only.
+     *
+     * Kept for compatibility; [importOfflinePackage] is preferred because merging lets the
+     * imported maps grow with newly downloaded tiles.
      */
     fun attachOfflinePackage(file: File): Boolean {
         return try {
@@ -63,6 +107,60 @@ class TileManager(private val context: Context) {
         } catch (e: Exception) {
             false
         }
+    }
+
+    data class ImportProgress(val done: Int, val total: Int)
+
+    /**
+     * Merges an .orntpack into local tile storage instead of reading it as a sealed archive.
+     *
+     * Why merge rather than attach: an attached package is read-only and separate from tiles
+     * fetched online, so "pack the cache" produced a file WITHOUT the imported content and the
+     * map could never grow. After merging, everything lives in one place — imported tiles and
+     * newly downloaded ones alike — so each export is a superset of what came before and a
+     * package can be passed around and enlarged by each person in turn.
+     *
+     * Entry paths keep their {source}/{z}/{x}/{y} layout, so tiles land back in the layer they
+     * came from and layer switching keeps working untouched.
+     *
+     * Existing tiles are never overwritten, which makes re-importing the same file cheap.
+     *
+     * @return number of tiles added.
+     */
+    suspend fun importOfflinePackage(
+        file: File,
+        onProgress: ((ImportProgress) -> Unit)? = null
+    ): Int = withContext(Dispatchers.IO) {
+        var added = 0
+        ZipFile(file).use { zip ->
+            val entries = zip.entries().toList().filter { entry ->
+                !entry.isDirectory &&
+                    (entry.name.endsWith(".png") || entry.name.endsWith(".jpg"))
+            }
+            val total = entries.size
+
+            entries.forEachIndexed { index, entry ->
+                // Reject paths that would escape the tile directory.
+                val safeName = entry.name.replace("\\", "/").trimStart('/')
+                if (safeName.contains("..")) return@forEachIndexed
+
+                val target = File(baseCacheDir, safeName)
+                if (!target.exists()) {
+                    target.parentFile?.mkdirs()
+                    zip.getInputStream(entry).use { input ->
+                        target.outputStream().use { output -> input.copyTo(output) }
+                    }
+                    added++
+                }
+
+                if (index % 200 == 0 || index == total - 1) {
+                    onProgress?.invoke(ImportProgress(index + 1, total))
+                }
+            }
+        }
+        Log.d(TAG, "Imported $added new tiles from ${file.name}")
+        clearMemoryCache()
+        added
     }
 
     /**
