@@ -6,6 +6,11 @@ import android.os.PowerManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.AppDatabase
+import com.example.data.elevation.ElevationEngine
+import com.example.data.elevation.LineOfSight
+import com.example.data.elevation.LineOfSightResult
+import com.example.data.elevation.RouteProfile
+import com.example.data.elevation.SightMode
 import com.example.data.entity.RouteEntity
 import com.example.data.entity.RouteLeg
 import com.example.data.entity.TrackEntity
@@ -424,6 +429,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setMapCenter(point: GeoPoint) {
         _mapCenter.value = point
         _isFollowingLocation.value = false
+        updateTerrainElevation(point)
     }
 
     fun setMapZoom(zoom: Double) {
@@ -484,6 +490,178 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         return source
     }
+
+    // --- Elevation (SRTM/HGT), line of sight, route profile ---
+
+    val elevationEngine = ElevationEngine(application)
+
+    private val _hasElevationData = MutableStateFlow(elevationEngine.hasAnyTiles())
+    val hasElevationData: StateFlow<Boolean> = _hasElevationData.asStateFlow()
+
+    /** Terrain height under the map centre, refreshed as the map moves. */
+    private val _terrainElevation = MutableStateFlow<Double?>(null)
+    val terrainElevation: StateFlow<Double?> = _terrainElevation.asStateFlow()
+
+    private val _losResult = MutableStateFlow<LineOfSightResult?>(null)
+    val losResult: StateFlow<LineOfSightResult?> = _losResult.asStateFlow()
+
+    private val _isCalculatingLos = MutableStateFlow(false)
+    val isCalculatingLos: StateFlow<Boolean> = _isCalculatingLos.asStateFlow()
+
+    private val _routeProfile = MutableStateFlow<RouteProfile?>(null)
+    val routeProfile: StateFlow<RouteProfile?> = _routeProfile.asStateFlow()
+
+    private val _isCalculatingProfile = MutableStateFlow(false)
+    val isCalculatingProfile: StateFlow<Boolean> = _isCalculatingProfile.asStateFlow()
+
+    private val _observerHeight = MutableStateFlow(LineOfSight.DEFAULT_OBSERVER_HEIGHT)
+    val observerHeight: StateFlow<Double> = _observerHeight.asStateFlow()
+
+    private val _targetHeight = MutableStateFlow(LineOfSight.DEFAULT_TARGET_HEIGHT)
+    val targetHeight: StateFlow<Double> = _targetHeight.asStateFlow()
+
+    private val _sightMode = MutableStateFlow(SightMode.VISUAL)
+    val sightMode: StateFlow<SightMode> = _sightMode.asStateFlow()
+
+    /** Endpoints of the current line-of-sight query. */
+    private val _losObserver = MutableStateFlow<GeoPoint?>(null)
+    val losObserver: StateFlow<GeoPoint?> = _losObserver.asStateFlow()
+
+    private val _losTarget = MutableStateFlow<GeoPoint?>(null)
+    val losTarget: StateFlow<GeoPoint?> = _losTarget.asStateFlow()
+
+    fun setObserverHeight(v: Double) { _observerHeight.value = v }
+    fun setTargetHeight(v: Double) { _targetHeight.value = v }
+    fun setSightMode(m: SightMode) { _sightMode.value = m }
+
+    fun refreshElevationAvailability() {
+        _hasElevationData.value = elevationEngine.hasAnyTiles()
+    }
+
+    /** Tile names covering the current view, and which are missing. */
+    fun elevationTilesForCurrentView(spanDegrees: Double = 0.25): Pair<List<String>, List<String>> {
+        val c = _mapCenter.value
+        return elevationEngine.tilesForBounds(
+            minLat = c.latitude - spanDegrees,
+            maxLat = c.latitude + spanDegrees,
+            minLon = c.longitude - spanDegrees,
+            maxLon = c.longitude + spanDegrees
+        )
+    }
+
+    private fun updateTerrainElevation(point: GeoPoint) {
+        if (!_hasElevationData.value) {
+            _terrainElevation.value = null
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            _terrainElevation.value = elevationEngine.getElevation(point.latitude, point.longitude)
+        }
+    }
+
+    /**
+     * Starts a line-of-sight query from the user's position (or [from]) to [to].
+     */
+    fun startLineOfSight(from: GeoPoint?, to: GeoPoint) {
+        val observer = from ?: gpsLocation.value ?: pdrState.value.lastEstimatedPosition ?: return
+        _losObserver.value = observer
+        _losTarget.value = to
+        calculateLineOfSight()
+    }
+
+    fun calculateLineOfSight() {
+        val observer = _losObserver.value ?: return
+        val target = _losTarget.value ?: return
+
+        viewModelScope.launch {
+            _isCalculatingLos.value = true
+            _losResult.value = LineOfSight.analyze(
+                engine = elevationEngine,
+                observer = observer,
+                target = target,
+                observerHeightMeters = _observerHeight.value,
+                targetHeightMeters = _targetHeight.value,
+                mode = _sightMode.value
+            )
+            _isCalculatingLos.value = false
+        }
+    }
+
+    fun clearLineOfSight() {
+        _losResult.value = null
+        _losObserver.value = null
+        _losTarget.value = null
+    }
+
+    /** Saves the blocking summit as a waypoint — useful for siting a relay or an OP. */
+    fun createObstacleWaypoint() {
+        val obstacle = _losResult.value?.worstObstacle ?: return
+        addWaypointAt(
+            name = "Препятствие ${obstacle.terrainMeters.toInt()} м",
+            latitude = obstacle.point.latitude,
+            longitude = obstacle.point.longitude,
+            altitude = obstacle.terrainMeters,
+            description = "Закрывает видимость, ${"%.0f".format(obstacle.distanceMeters)} м от наблюдателя",
+            colorArgb = 0xFFFFA726.toInt()
+        )
+    }
+
+    fun goToObstacle() {
+        _losResult.value?.worstObstacle?.let { setMapCenter(it.point) }
+    }
+
+    fun calculateRouteProfile(route: RouteEntity) {
+        viewModelScope.launch {
+            _isCalculatingProfile.value = true
+            val all = waypoints.value
+            val points = route.parseWaypointIds()
+                .mapNotNull { id -> all.firstOrNull { it.id == id } }
+                .map { GeoPoint(it.latitude, it.longitude, it.altitudeMeters) }
+            _routeProfile.value = LineOfSight.routeProfile(elevationEngine, points)
+            _isCalculatingProfile.value = false
+        }
+    }
+
+    fun clearRouteProfile() {
+        _routeProfile.value = null
+    }
+
+    /**
+     * Imports .hgt tiles, accepting bare files as well as the .zip archives they ship in.
+     *
+     * @return number of tiles added.
+     */
+    suspend fun importElevationFile(file: java.io.File, displayName: String): Int =
+        withContext(Dispatchers.IO) {
+            var added = 0
+            try {
+                if (displayName.endsWith(".zip", true) || displayName.endsWith(".hgt.zip", true)) {
+                    java.util.zip.ZipFile(file).use { zip ->
+                        zip.entries().asSequence()
+                            .filter { !it.isDirectory && it.name.endsWith(".hgt", true) }
+                            .forEach { entry ->
+                                val name = entry.name.substringAfterLast('/')
+                                val target = java.io.File(elevationEngine.elevationDir, name.uppercase())
+                                if (!target.exists()) {
+                                    zip.getInputStream(entry).use { input ->
+                                        target.outputStream().use { out -> input.copyTo(out) }
+                                    }
+                                    added++
+                                }
+                            }
+                    }
+                } else if (displayName.endsWith(".hgt", true)) {
+                    val target = java.io.File(elevationEngine.elevationDir, displayName.uppercase())
+                    if (!target.exists()) {
+                        file.copyTo(target, overwrite = false)
+                        added++
+                    }
+                }
+            } catch (_: Exception) {
+            }
+            refreshElevationAvailability()
+            added
+        }
 
     // --- Region download (select an area and fetch it slowly) ---
 
