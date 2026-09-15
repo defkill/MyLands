@@ -73,6 +73,14 @@ fun NavigationMainScreen(
     val isSelectingRegion by viewModel.isSelectingRegion.collectAsStateWithLifecycle()
     val regionSelection by viewModel.regionSelection.collectAsStateWithLifecycle()
     val downloadProgress by viewModel.downloadProgress.collectAsStateWithLifecycle()
+    val terrainElevation by viewModel.terrainElevation.collectAsStateWithLifecycle()
+    val losResult by viewModel.losResult.collectAsStateWithLifecycle()
+    val isCalculatingLos by viewModel.isCalculatingLos.collectAsStateWithLifecycle()
+    val observerHeight by viewModel.observerHeight.collectAsStateWithLifecycle()
+    val targetHeight by viewModel.targetHeight.collectAsStateWithLifecycle()
+    val sightMode by viewModel.sightMode.collectAsStateWithLifecycle()
+    val routeProfile by viewModel.routeProfile.collectAsStateWithLifecycle()
+    val isCalculatingProfile by viewModel.isCalculatingProfile.collectAsStateWithLifecycle()
 
     // Best available position: a live fix when there is one, otherwise the step-counted
     // estimate. Bearings and distances to waypoints stay useful with GPS switched off,
@@ -95,6 +103,11 @@ fun NavigationMainScreen(
     var showTracksSheet by remember { mutableStateOf(false) }
     var showClearTilesConfirm by remember { mutableStateOf(false) }
     var showRegionDownloadDialog by remember { mutableStateOf(false) }
+    var showQrDialogFor by remember { mutableStateOf<Pair<String, GeoPoint>?>(null) }
+    var showQrScanner by remember { mutableStateOf(false) }
+    var scannedPoint by remember { mutableStateOf<com.example.data.qr.QrPayload.DecodedPoint?>(null) }
+    var showLosDialog by remember { mutableStateOf(false) }
+    var showRouteProfileFor by remember { mutableStateOf<com.example.data.entity.RouteEntity?>(null) }
     // Progress can be collapsed so the map stays usable during multi-hour downloads.
     var isDownloadMinimized by remember { mutableStateOf(false) }
     var editingWaypoint by remember { mutableStateOf<com.example.data.entity.WaypointEntity?>(null) }
@@ -231,6 +244,7 @@ fun NavigationMainScreen(
                 savedRoutes = routes,
                 triangulationState = triangulationState,
                 savedTrackPoints = savedTrackPoints,
+                losResult = losResult,
                 isSelectingRegion = isSelectingRegion,
                 regionSelection = regionSelection,
                 onRegionSelected = { viewModel.setRegionSelection(it) },
@@ -489,6 +503,28 @@ fun NavigationMainScreen(
                         }
                     }
 
+                    // QR scanner: receive a point with every radio off.
+                    Surface(
+                        onClick = { showQrScanner = true },
+                        color = Color(0xDD161C24),
+                        shape = RoundedCornerShape(20.dp),
+                        modifier = Modifier.testTag("qr_scanner_button")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.QrCodeScanner,
+                                contentDescription = "Сканер QR",
+                                tint = Color(0xFF80DEEA),
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(3.dp))
+                            Text("QR", color = Color.White, fontSize = 11.sp)
+                        }
+                    }
+
                     // Saved Waypoints Sheet button
                     Surface(
                         onClick = { showSavedWaypointsSheet = true },
@@ -721,6 +757,10 @@ fun NavigationMainScreen(
                             Toast.makeText(context, "Маршрут сохранен!", Toast.LENGTH_SHORT).show()
                         },
                         onLoadRoute = { viewModel.loadRouteIntoBuilder(it) },
+                        onShowProfile = { route ->
+                            showRouteProfileFor = route
+                            viewModel.calculateRouteProfile(route)
+                        },
                         onDeleteRoute = {
                             viewModel.deleteRoute(it)
                             Toast.makeText(context, "Маршрут удалён", Toast.LENGTH_SHORT).show()
@@ -738,6 +778,7 @@ fun NavigationMainScreen(
                     orientationData = orientationData,
                     gpsStatus = gpsStatus,
                     pdrState = pdrState,
+                    terrainElevation = terrainElevation,
                     onClick = { viewModel.openCoordinateModal() }
                 )
             }
@@ -862,6 +903,15 @@ fun NavigationMainScreen(
                 viewModel.startTriangulation()
                 editingWaypoint = null
                 showTriangulationDialog = true
+            },
+            onShowQr = {
+                showQrDialogFor = wp.name to wp.toGeoPoint()
+                editingWaypoint = null
+            },
+            onCheckVisibility = {
+                viewModel.startLineOfSight(from = effectiveLocation, to = wp.toGeoPoint())
+                editingWaypoint = null
+                showLosDialog = true
             },
             onDelete = {
                 viewModel.deleteWaypoint(wp.id)
@@ -1034,6 +1084,87 @@ fun NavigationMainScreen(
     // Reset the collapsed flag when a download ends, so the next one opens normally.
     LaunchedEffect(downloadProgress == null) {
         if (downloadProgress == null) isDownloadMinimized = false
+    }
+
+    showQrDialogFor?.let { (name, point) ->
+        QrCodeDialog(
+            name = name,
+            point = point,
+            coordinateSystem = userPreferences.defaultCoordinateSystem,
+            onDismiss = { showQrDialogFor = null }
+        )
+    }
+
+    if (showQrScanner) {
+        QrScannerDialog(
+            onPointScanned = { decoded ->
+                showQrScanner = false
+                scannedPoint = decoded
+            },
+            onDismiss = { showQrScanner = false }
+        )
+    }
+
+    scannedPoint?.let { decoded ->
+        ScannedPointDialog(
+            decoded = decoded,
+            onSave = {
+                viewModel.addWaypointAt(
+                    name = decoded.name,
+                    latitude = decoded.latitude,
+                    longitude = decoded.longitude,
+                    altitude = decoded.altitudeMeters,
+                    description = "Получена по QR",
+                    colorArgb = 0xFF00BCD4.toInt()
+                )
+                scannedPoint = null
+                Toast.makeText(context, "Точка сохранена", Toast.LENGTH_SHORT).show()
+            },
+            onShowOnMap = {
+                viewModel.setMapCenter(decoded.toGeoPoint())
+                viewModel.setMapZoom(15.0)
+                scannedPoint = null
+            },
+            onDismiss = { scannedPoint = null }
+        )
+    }
+
+    if (showLosDialog) {
+        LineOfSightDialog(
+            result = losResult,
+            isCalculating = isCalculatingLos,
+            observerHeight = observerHeight,
+            targetHeight = targetHeight,
+            sightMode = sightMode,
+            onObserverHeightChange = { viewModel.setObserverHeight(it) },
+            onTargetHeightChange = { viewModel.setTargetHeight(it) },
+            onSightModeChange = { viewModel.setSightMode(it) },
+            onRecalculate = { viewModel.calculateLineOfSight() },
+            onGoToObstacle = {
+                viewModel.goToObstacle()
+                showLosDialog = false
+            },
+            onCreateObstacleWaypoint = {
+                viewModel.createObstacleWaypoint()
+                Toast.makeText(context, "Ориентир на вершине создан", Toast.LENGTH_SHORT).show()
+            },
+            onDismiss = {
+                showLosDialog = false
+                viewModel.clearLineOfSight()
+            }
+        )
+    }
+
+    showRouteProfileFor?.let { route ->
+        RouteProfileDialog(
+            profile = routeProfile,
+            routeName = route.name,
+            isCalculating = isCalculatingProfile,
+            onDismiss = {
+                showRouteProfileFor = null
+                viewModel.clearRouteProfile()
+            }
+        )
     }
 
     if (showClearTilesConfirm) {
