@@ -188,6 +188,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     if (accurateEnough && plausible) {
                         lastGoodFix = loc
                         stepDetectorManager.updateGpsAnchor(loc)
+
+                        // Learn how the phone is carried: compare the GPS course over ground
+                        // with the device heading while genuinely moving. Without this the blind
+                        // leg is projected along wherever the phone happens to point, which
+                        // rotates the whole path sideways.
+                        val course = loc.bearingDeg
+                        val speed = loc.speedMps
+                        if (course != null && speed != null && speed >= MIN_CALIBRATION_SPEED_MPS) {
+                            stepDetectorManager.submitHeadingCalibration(
+                                gpsCourseDeg = course,
+                                deviceHeadingDeg = orientationManager.orientationData.value.trueHeadingDeg
+                            )
+                        }
                     }
                     if (_isFollowingLocation.value) {
                         _mapCenter.value = loc
@@ -360,6 +373,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private companion object {
         /** Minimum spacing between recorded GPS points, in metres. */
         const val MIN_TRACK_POINT_DISTANCE_METERS = 5.0
+
+        /**
+         * Below this speed the GPS course over ground is noise, not a direction of travel,
+         * so it must not be used to calibrate the carry offset.
+         */
+        const val MIN_CALIBRATION_SPEED_MPS = 0.8f
 
         /** Fixes worse than this carry no usable information and are dropped on the spot. */
         const val UNUSABLE_ACCURACY_METERS = 100.0f
