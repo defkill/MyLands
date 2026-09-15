@@ -24,6 +24,8 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import com.example.map.OfflineMapFormat
 import com.example.viewmodel.MainViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
@@ -43,6 +45,32 @@ fun DataExchangeDialog(
     val activeTileSource by viewModel.activeTileSource.collectAsState()
 
     // Universal map file picker (.mbtiles or .orntpack / .zip) with automatic detection
+    // Holds the packed file until the user has picked a destination folder.
+    var pendingSaveFile by remember { mutableStateOf<File?>(null) }
+
+    // Lets the user save the package anywhere on the device (Downloads, SD card, a folder of
+    // their choice) instead of only handing it to another app through the share sheet.
+    val saveMapLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/zip")
+    ) { uri: Uri? ->
+        val source = pendingSaveFile
+        pendingSaveFile = null
+        if (uri != null && source != null) {
+            coroutineScope.launch {
+                try {
+                    withContext(Dispatchers.IO) {
+                        context.contentResolver.openOutputStream(uri)?.use { output ->
+                            source.inputStream().use { input -> input.copyTo(output) }
+                        }
+                    }
+                    Toast.makeText(context, "Файл карты сохранён", Toast.LENGTH_LONG).show()
+                } catch (e: Exception) {
+                    Toast.makeText(context, "Не удалось сохранить: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
     val importMapLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
@@ -65,25 +93,42 @@ fun DataExchangeDialog(
                         }
                     }
 
-                    val (format, success) = viewModel.importOfflineMapFile(targetFile)
-                    if (success) {
-                        when (format) {
-                            OfflineMapFormat.MBTILES -> {
-                                val name = viewModel.activeMbtiles.value?.name ?: targetFile.nameWithoutExtension
-                                Toast.makeText(context, "Карта MBTiles '$name' подключена (SQLite)!", Toast.LENGTH_LONG).show()
-                                onDismiss()
-                            }
-                            OfflineMapFormat.ORNTPACK -> {
-                                Toast.makeText(context, "Офлайн-пакет .orntpack подключен в кэш!", Toast.LENGTH_LONG).show()
-                                onDismiss()
-                            }
-                            OfflineMapFormat.UNKNOWN -> {
-                                Toast.makeText(context, "Офлайн-карта подключена!", Toast.LENGTH_SHORT).show()
-                                onDismiss()
-                            }
+                    val format = com.example.map.OfflineMapDetector.detectFromFile(targetFile)
+
+                    if (format == OfflineMapFormat.MBTILES) {
+                        val source = viewModel.attachMbtilesFile(targetFile)
+                        if (source != null) {
+                            Toast.makeText(
+                                context,
+                                "Карта MBTiles '${source.name}' подключена (SQLite)!",
+                                Toast.LENGTH_LONG
+                            ).show()
+                            onDismiss()
+                        } else {
+                            Toast.makeText(context, "Не удалось открыть .mbtiles", Toast.LENGTH_LONG).show()
                         }
                     } else {
-                        Toast.makeText(context, "Не удалось открыть файл карты (.mbtiles или .orntpack)", Toast.LENGTH_LONG).show()
+                        // MERGE, do not just attach: an attached package stays separate from the
+                        // downloaded tiles, so "pack everything" silently produced a file without
+                        // it. Merging is what makes an exported map a superset of everything the
+                        // device has.
+                        val added = viewModel.importOrntpackMerging(targetFile)
+                        if (added != null) {
+                            Toast.makeText(
+                                context,
+                                if (added > 0) "Карта добавлена: $added новых тайлов"
+                                else "Все тайлы из файла уже есть на устройстве",
+                                Toast.LENGTH_LONG
+                            ).show()
+                            targetFile.delete()
+                            onDismiss()
+                        } else {
+                            Toast.makeText(
+                                context,
+                                "Не удалось открыть файл карты (.mbtiles или .orntpack)",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
                     }
                 } catch (e: Exception) {
                     Toast.makeText(context, "Ошибка импорта карты: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
@@ -314,7 +359,7 @@ fun DataExchangeDialog(
                     fontSize = 11.sp
                 )
 
-                // 5. Pack current tile cache to .orntpack
+                // 5. Pack all stored tiles to .orntpack — save to a folder
                 OutlinedButton(
                     onClick = {
                         coroutineScope.launch {
@@ -323,10 +368,43 @@ fun DataExchangeDialog(
                                 val packFile = File(context.cacheDir, "tactical_map_region.orntpack")
                                 val count = viewModel.packCurrentCache(packFile)
                                 if (count > 0) {
-                                    Toast.makeText(context, "Упаковано $count тайлов в .orntpack", Toast.LENGTH_SHORT).show()
+                                    pendingSaveFile = packFile
+                                    val stamp = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US)
+                                        .format(java.util.Date())
+                                    saveMapLauncher.launch("maps_$stamp.orntpack")
+                                } else {
+                                    Toast.makeText(context, "Карт пока нет. Просмотрите нужный регион онлайн перед упаковкой.", Toast.LENGTH_LONG).show()
+                                }
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "Ошибка упаковки: ${e.message}", Toast.LENGTH_SHORT).show()
+                            } finally {
+                                isProcessing = false
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth().testTag("save_orntpack_button"),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
+                ) {
+                    Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color(0xFF81C784))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Сохранить все карты в файл")
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // 6. Pack all stored tiles to .orntpack — share directly
+                OutlinedButton(
+                    onClick = {
+                        coroutineScope.launch {
+                            isProcessing = true
+                            try {
+                                val packFile = File(context.cacheDir, "tactical_map_region.orntpack")
+                                val count = viewModel.packCurrentCache(packFile)
+                                if (count > 0) {
+                                    Toast.makeText(context, "Упаковано $count тайлов", Toast.LENGTH_SHORT).show()
                                     shareFile(context, packFile, "application/zip", "Поделиться пакетом карт .orntpack")
                                 } else {
-                                    Toast.makeText(context, "Кэш тайлов пуст. Просмотрите нужный регион перед упаковкой.", Toast.LENGTH_LONG).show()
+                                    Toast.makeText(context, "Карт пока нет. Просмотрите нужный регион онлайн перед упаковкой.", Toast.LENGTH_LONG).show()
                                 }
                             } catch (e: Exception) {
                                 Toast.makeText(context, "Ошибка упаковки: ${e.message}", Toast.LENGTH_SHORT).show()
@@ -340,7 +418,7 @@ fun DataExchangeDialog(
                 ) {
                     Icon(Icons.Default.Archive, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color(0xFFFFB74D))
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Собрать все карты в файл и отправить")
+                    Text("Отправить все карты файлом")
                 }
             }
         },
