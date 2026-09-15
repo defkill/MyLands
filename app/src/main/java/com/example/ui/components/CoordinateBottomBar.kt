@@ -33,6 +33,8 @@ fun CoordinateBottomBar(
     orientationData: OrientationData,
     gpsStatus: GpsStatus,
     pdrState: PdrState,
+    /** True terrain height from local SRTM data, when tiles are available. */
+    terrainElevation: Double? = null,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -130,6 +132,18 @@ fun CoordinateBottomBar(
                     fontSize = 12.sp,
                     fontFamily = FontFamily.Monospace
                 )
+
+                // Terrain height from SRTM, which is the ground itself rather than the GPS
+                // ellipsoid figure — the number that matters for reading the landscape.
+                terrainElevation?.let { h ->
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = "H: ${h.toInt()} м",
+                        color = Color(0xFF81C784),
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
 
                 // GPS / PDR Telemetry
                 val gpsColor = when (gpsStatus) {
