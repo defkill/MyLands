@@ -255,6 +255,8 @@ fun EditWaypointDialog(
     waypoint: WaypointEntity,
     onSave: (String, String) -> Unit,
     onStartTriangulation: () -> Unit,
+    onShowQr: () -> Unit,
+    onCheckVisibility: () -> Unit,
     onDelete: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -287,6 +289,20 @@ fun EditWaypointDialog(
                     modifier = Modifier.fillMaxWidth().testTag("edit_waypoint_ray_button")
                 ) {
                     Text("Пустить луч / отрезок от точки", color = Color(0xFFFF7043))
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                OutlinedButton(
+                    onClick = onCheckVisibility,
+                    modifier = Modifier.fillMaxWidth().testTag("edit_waypoint_los_button")
+                ) {
+                    Text("Проверить видимость отсюда", color = Color(0xFF80DEEA))
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                OutlinedButton(
+                    onClick = onShowQr,
+                    modifier = Modifier.fillMaxWidth().testTag("edit_waypoint_qr_button")
+                ) {
+                    Text("Показать QR-код", color = Color(0xFF81C784))
                 }
                 Spacer(modifier = Modifier.height(4.dp))
                 TextButton(onClick = onDelete, modifier = Modifier.fillMaxWidth()) {
