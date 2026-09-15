@@ -136,6 +136,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * Metres walked by dead reckoning since the last real GPS fix. Surfaced in the UI so the
      * user can judge how much error has accumulated: PDR drifts roughly 5-10% of distance.
      */
+    /**
+     * Last GPS fix trusted enough to anchor dead reckoning on.
+     *
+     * The raw last fix is not safe for this: if the signal died right after an outlier, the
+     * whole dead-reckoning leg inherits that error and the correctly-shaped walk is drawn
+     * hundreds of metres from where it happened.
+     */
+    private var lastGoodFix: GeoPoint? = null
+
     private val _blindDistanceMeters = MutableStateFlow(0.0)
     val blindDistanceMeters: StateFlow<Double> = _blindDistanceMeters.asStateFlow()
 
@@ -157,7 +166,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             gpsLocation.collect { loc ->
                 if (loc != null) {
                     orientationManager.updateGeomagneticDeclination(loc.latitude, loc.longitude, loc.altitude ?: 0.0)
-                    stepDetectorManager.updateGpsAnchor(loc)
+
+                    // Only anchor on fixes that pass a sanity check: good reported accuracy and
+                    // a plausible step from the previous trusted fix.
+                    val acc = loc.accuracy
+                    val accurateEnough = acc == null || acc <= TrackFilter.MAX_ACCURACY_METERS
+                    val prevGood = lastGoodFix
+                    val plausible = prevGood == null || run {
+                        val d = GeodesyEngine.distanceMeters(
+                            prevGood.latitude, prevGood.longitude, loc.latitude, loc.longitude
+                        )
+                        val dt = (loc.timestamp - prevGood.timestamp) / 1000.0
+                        dt <= 0.0 || d / dt <= TrackFilter.MAX_SPEED_MPS
+                    }
+
+                    if (accurateEnough && plausible) {
+                        lastGoodFix = loc
+                        stepDetectorManager.updateGpsAnchor(loc)
+                    }
                     if (_isFollowingLocation.value) {
                         _mapCenter.value = loc
                     }
@@ -198,7 +224,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _isPositionEstimated.value = !live
 
                 if (!live) {
-                    val anchor = locationTracker.lastFixBeforeSignalLoss.value
+                    val anchor = lastGoodFix
+                        ?: locationTracker.lastFixBeforeSignalLoss.value
                         ?: gpsLocation.value
                         ?: pdrState.value.lastEstimatedPosition
                     if (anchor != null) {
