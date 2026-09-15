@@ -194,15 +194,30 @@ fun RegionDownloadProgressDialog(
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = "Можно свернуть приложение и выключить экран — загрузка идёт в фоне.",
+                    text = "Сверните это окно — карта останется доступной, а прогресс будет " +
+                        "виден на кнопке «Файлы». Можно выключить экран, загрузка продолжится.",
                     color = Color(0xFF607D8B),
                     fontSize = 10.sp
                 )
             }
         },
         confirmButton = {
-            TextButton(onClick = onCancel) {
-                Text("Остановить", color = Color(0xFFEF9A9A))
+            Button(
+                onClick = onMinimize,
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00897B)),
+                modifier = Modifier.testTag("minimize_download_button")
+            ) {
+                Text("Свернуть", fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            Row {
+                TextButton(onClick = onOpenFiles) {
+                    Text("Файлы", color = Color(0xFF90CAF9))
+                }
+                TextButton(onClick = onCancel) {
+                    Text("Остановить", color = Color(0xFFEF9A9A))
+                }
             }
         }
     )
