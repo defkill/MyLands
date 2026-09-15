@@ -69,6 +69,9 @@ fun NavigationMainScreen(
     val showRawTracks by viewModel.showRawTracks.collectAsStateWithLifecycle()
     val isPositionEstimated by viewModel.isPositionEstimated.collectAsStateWithLifecycle()
     val packImportProgress by viewModel.packImportProgress.collectAsStateWithLifecycle()
+    val isSelectingRegion by viewModel.isSelectingRegion.collectAsStateWithLifecycle()
+    val regionSelection by viewModel.regionSelection.collectAsStateWithLifecycle()
+    val downloadProgress by viewModel.downloadProgress.collectAsStateWithLifecycle()
 
     // Best available position: a live fix when there is one, otherwise the step-counted
     // estimate. Bearings and distances to waypoints stay useful with GPS switched off,
@@ -90,6 +93,7 @@ fun NavigationMainScreen(
     var showTriangulationDialog by remember { mutableStateOf(false) }
     var showTracksSheet by remember { mutableStateOf(false) }
     var showClearTilesConfirm by remember { mutableStateOf(false) }
+    var showRegionDownloadDialog by remember { mutableStateOf(false) }
     var editingWaypoint by remember { mutableStateOf<com.example.data.entity.WaypointEntity?>(null) }
     var showSavedWaypointsSheet by remember { mutableStateOf(false) }
     var showSettlementSearchSheet by remember { mutableStateOf(false) }
@@ -224,6 +228,9 @@ fun NavigationMainScreen(
                 savedRoutes = routes,
                 triangulationState = triangulationState,
                 savedTrackPoints = savedTrackPoints,
+                isSelectingRegion = isSelectingRegion,
+                regionSelection = regionSelection,
+                onRegionSelected = { viewModel.setRegionSelection(it) },
                 activeTrackPoints = currentTrackPoints,
                 angleUnit = userPreferences.defaultAngleUnit
             )
@@ -353,6 +360,30 @@ fun NavigationMainScreen(
                                     }
                                 )
                             }
+                            HorizontalDivider(color = Color(0xFF37474F))
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            Icons.Default.Download,
+                                            contentDescription = null,
+                                            tint = Color(0xFF81C784),
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("Загрузить область", color = Color(0xFF81C784))
+                                    }
+                                },
+                                onClick = {
+                                    viewModel.startRegionSelection()
+                                    showMapSourceMenu = false
+                                    Toast.makeText(
+                                        context,
+                                        "Выделите область на карте: проведите пальцем по диагонали",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
+                            )
                             HorizontalDivider(color = Color(0xFF37474F))
                             DropdownMenuItem(
                                 text = {
@@ -855,6 +886,80 @@ fun NavigationMainScreen(
 
     // Deleting tiles is now permanent: they live in app storage, not a disposable cache.
     // Losing a downloaded region to a stray tap would only be discovered offline in the field.
+    // Bar shown while an area is being selected on the map.
+    if (isSelectingRegion) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 120.dp, start = 16.dp, end = 16.dp),
+                color = Color(0xEE10151C),
+                shape = RoundedCornerShape(12.dp),
+                tonalElevation = 8.dp
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Text(
+                        text = if (regionSelection == null) {
+                            "Проведите пальцем по диагонали, чтобы выделить область"
+                        } else {
+                            val b = regionSelection!!
+                            val widthKm = GeodesyEngine.distanceMeters(
+                                b.minLat, b.minLon, b.minLat, b.maxLon
+                            ) / 1000.0
+                            val heightKm = GeodesyEngine.distanceMeters(
+                                b.minLat, b.minLon, b.maxLat, b.minLon
+                            ) / 1000.0
+                            String.format(java.util.Locale.US, "Область %.1f × %.1f км", widthKm, heightKm)
+                        },
+                        color = Color.White,
+                        fontSize = 13.sp
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = { showRegionDownloadDialog = true },
+                            enabled = regionSelection != null,
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
+                        ) { Text("Далее") }
+                        OutlinedButton(
+                            onClick = { viewModel.cancelRegionSelection() },
+                            modifier = Modifier.weight(1f)
+                        ) { Text("Отмена", color = Color.Gray) }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showRegionDownloadDialog) {
+        RegionDownloadDialog(
+            availableSources = availableTileSources.filter { it.urlTemplate.isNotBlank() },
+            estimateFor = { minZ, maxZ, layers -> viewModel.estimateRegion(minZ, maxZ, layers) },
+            onStart = { minZ, maxZ, sources ->
+                showRegionDownloadDialog = false
+                viewModel.startRegionDownload(minZ, maxZ, sources) { result ->
+                    val msg = when {
+                        result.cancelled -> "Загрузка остановлена. Загружено ${result.downloaded} тайлов"
+                        result.abortedByProvider ->
+                            "Сервер карт перестал отвечать — загрузка прервана. Загружено ${result.downloaded}. Повторите позже."
+                        else -> "Готово: ${result.downloaded} новых, ${result.skipped} уже были"
+                    }
+                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                    viewModel.cancelRegionSelection()
+                }
+            },
+            onDismiss = { showRegionDownloadDialog = false }
+        )
+    }
+
+    downloadProgress?.let { progress ->
+        RegionDownloadProgressDialog(
+            progress = progress,
+            onCancel = { viewModel.cancelRegionDownload() }
+        )
+    }
+
     if (showClearTilesConfirm) {
         AlertDialog(
             onDismissRequest = { showClearTilesConfirm = false },
