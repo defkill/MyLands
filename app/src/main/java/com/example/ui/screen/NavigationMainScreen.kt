@@ -68,6 +68,7 @@ fun NavigationMainScreen(
     val savedTrackPoints by viewModel.visibleTrackPoints.collectAsStateWithLifecycle()
     val showRawTracks by viewModel.showRawTracks.collectAsStateWithLifecycle()
     val isPositionEstimated by viewModel.isPositionEstimated.collectAsStateWithLifecycle()
+    val packImportProgress by viewModel.packImportProgress.collectAsStateWithLifecycle()
 
     // Best available position: a live fix when there is one, otherwise the step-counted
     // estimate. Bearings and distances to waypoints stay useful with GPS switched off,
@@ -88,6 +89,7 @@ fun NavigationMainScreen(
     var showCompassScreen by remember { mutableStateOf(false) }
     var showTriangulationDialog by remember { mutableStateOf(false) }
     var showTracksSheet by remember { mutableStateOf(false) }
+    var showClearTilesConfirm by remember { mutableStateOf(false) }
     var editingWaypoint by remember { mutableStateOf<com.example.data.entity.WaypointEntity?>(null) }
     var showSavedWaypointsSheet by remember { mutableStateOf(false) }
     var showSettlementSearchSheet by remember { mutableStateOf(false) }
@@ -124,6 +126,8 @@ fun NavigationMainScreen(
         }
     }
 
+    val importScope = rememberCoroutineScope()
+
     // File picker launcher for offline maps (.orntpack / .zip or .mbtiles)
     val offlinePackageLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -139,21 +143,41 @@ fun NavigationMainScreen(
                         input.copyTo(output)
                     }
                 }
-                val (detectedFormat, success) = viewModel.importOfflineMapFile(tempFile)
-                if (success) {
-                    when (detectedFormat) {
-                        OfflineMapFormat.MBTILES -> {
-                            Toast.makeText(context, "Карта MBTiles '${viewModel.activeMbtiles.value?.name ?: displayName}' подключена!", Toast.LENGTH_SHORT).show()
-                        }
-                        OfflineMapFormat.ORNTPACK -> {
-                            Toast.makeText(context, "Офлайн-пакет .orntpack успешно подключен!", Toast.LENGTH_SHORT).show()
-                        }
-                        OfflineMapFormat.UNKNOWN -> {
-                            Toast.makeText(context, "Офлайн-карта подключена!", Toast.LENGTH_SHORT).show()
-                        }
+                val format = com.example.map.OfflineMapDetector.detectFromFile(tempFile)
+
+                if (format == OfflineMapFormat.MBTILES) {
+                    val source = viewModel.attachMbtilesFile(tempFile)
+                    if (source != null) {
+                        Toast.makeText(
+                            context,
+                            "Карта MBTiles '${source.name}' подключена!",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    } else {
+                        Toast.makeText(context, "Не удалось открыть .mbtiles", Toast.LENGTH_LONG).show()
                     }
                 } else {
-                    Toast.makeText(context, "Не удалось открыть файл карты (.mbtiles или .orntpack)", Toast.LENGTH_LONG).show()
+                    // .orntpack is MERGED into local storage rather than attached read-only, so
+                    // its tiles join everything already downloaded and future exports include
+                    // both. That is what lets a shared map file keep growing as it is passed on.
+                    importScope.launch {
+                        val added = viewModel.importOrntpackMerging(tempFile)
+                        if (added != null) {
+                            Toast.makeText(
+                                context,
+                                if (added > 0) "Карта добавлена: $added новых тайлов"
+                                else "Все тайлы из файла уже есть в памяти",
+                                Toast.LENGTH_LONG
+                            ).show()
+                            tempFile.delete()
+                        } else {
+                            Toast.makeText(
+                                context,
+                                "Не удалось открыть файл карты (.mbtiles или .orntpack)",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    }
                 }
             } catch (e: Exception) {
                 Toast.makeText(context, "Ошибка импорта: ${e.message}", Toast.LENGTH_SHORT).show()
@@ -340,13 +364,12 @@ fun NavigationMainScreen(
                                             modifier = Modifier.size(16.dp)
                                         )
                                         Spacer(modifier = Modifier.width(6.dp))
-                                        Text("Очистить кэш слоя", color = Color(0xFFFFB74D))
+                                        Text("Удалить тайлы слоя", color = Color(0xFFFFB74D))
                                     }
                                 },
                                 onClick = {
-                                    viewModel.clearTileCacheForActiveSource()
                                     showMapSourceMenu = false
-                                    Toast.makeText(context, "Кэш тайлов очищен", Toast.LENGTH_SHORT).show()
+                                    showClearTilesConfirm = true
                                 }
                             )
                             HorizontalDivider(color = Color(0xFF37474F))
@@ -790,6 +813,75 @@ fun NavigationMainScreen(
             onDismiss = {
                 showTriangulationDialog = false
                 viewModel.cancelTriangulation()
+            }
+        )
+    }
+
+    // Import progress: merging a large package takes a while and must not look frozen.
+    packImportProgress?.let { progress ->
+        AlertDialog(
+            onDismissRequest = { },
+            containerColor = Color(0xFF161E28),
+            title = { Text("Импорт карты", color = Color.White, fontSize = 15.sp) },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = if (progress.total > 0) {
+                            "Добавлено ${progress.done} из ${progress.total} тайлов"
+                        } else {
+                            "Чтение файла…"
+                        },
+                        color = Color(0xFFB0BEC5),
+                        fontSize = 13.sp
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    if (progress.total > 0) {
+                        LinearProgressIndicator(
+                            progress = { progress.done.toFloat() / progress.total.toFloat() },
+                            modifier = Modifier.fillMaxWidth(),
+                            color = Color(0xFF00E5FF)
+                        )
+                    } else {
+                        LinearProgressIndicator(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = Color(0xFF00E5FF)
+                        )
+                    }
+                }
+            },
+            confirmButton = {}
+        )
+    }
+
+    // Deleting tiles is now permanent: they live in app storage, not a disposable cache.
+    // Losing a downloaded region to a stray tap would only be discovered offline in the field.
+    if (showClearTilesConfirm) {
+        AlertDialog(
+            onDismissRequest = { showClearTilesConfirm = false },
+            containerColor = Color(0xFF161E28),
+            title = { Text("Удалить загруженные тайлы?", color = Color.White, fontSize = 15.sp) },
+            text = {
+                Text(
+                    "Карты текущего слоя будут удалены с устройства. Без интернета восстановить " +
+                        "их не получится. Импортированные из файла тайлы тоже удалятся.",
+                    color = Color(0xFFB0BEC5),
+                    fontSize = 13.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.clearTileCacheForActiveSource()
+                        showClearTilesConfirm = false
+                        Toast.makeText(context, "Тайлы слоя удалены", Toast.LENGTH_SHORT).show()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC62828))
+                ) { Text("Удалить") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearTilesConfirm = false }) {
+                    Text("Отмена", color = Color.Gray)
+                }
             }
         )
     }
