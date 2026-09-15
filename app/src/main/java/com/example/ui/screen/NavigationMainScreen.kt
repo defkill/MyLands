@@ -938,19 +938,26 @@ fun NavigationMainScreen(
             estimateFor = { minZ, maxZ, layers -> viewModel.estimateRegion(minZ, maxZ, layers) },
             onStart = { minZ, maxZ, sources ->
                 showRegionDownloadDialog = false
-                viewModel.startRegionDownload(minZ, maxZ, sources) { result ->
-                    val msg = when {
-                        result.cancelled -> "Загрузка остановлена. Загружено ${result.downloaded} тайлов"
-                        result.abortedByProvider ->
-                            "Сервер карт перестал отвечать — загрузка прервана. Загружено ${result.downloaded}. Повторите позже."
-                        else -> "Готово: ${result.downloaded} новых, ${result.skipped} уже были"
-                    }
-                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
-                    viewModel.cancelRegionSelection()
-                }
+                viewModel.startRegionDownload(minZ, maxZ, sources)
+                viewModel.cancelRegionSelection()
             },
             onDismiss = { showRegionDownloadDialog = false }
         )
+    }
+
+    // Report the outcome once, from a composable (main thread). Calling Toast straight from the
+    // download coroutine crashed the app: Toast may only be shown on a thread with a Looper.
+    val downloadResult by viewModel.downloadResult.collectAsStateWithLifecycle()
+    LaunchedEffect(downloadResult) {
+        val result = downloadResult ?: return@LaunchedEffect
+        val msg = when {
+            result.cancelled -> "Загрузка остановлена. Загружено ${result.downloaded} тайлов"
+            result.abortedByProvider ->
+                "Сервер карт перестал отвечать — загрузка прервана. Загружено ${result.downloaded}. Повторите позже."
+            else -> "Готово: ${result.downloaded} новых, ${result.skipped} уже были"
+        }
+        Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+        viewModel.consumeDownloadResult()
     }
 
     downloadProgress?.let { progress ->
