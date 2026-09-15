@@ -21,6 +21,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -94,6 +95,8 @@ fun NavigationMainScreen(
     var showTracksSheet by remember { mutableStateOf(false) }
     var showClearTilesConfirm by remember { mutableStateOf(false) }
     var showRegionDownloadDialog by remember { mutableStateOf(false) }
+    // Progress can be collapsed so the map stays usable during multi-hour downloads.
+    var isDownloadMinimized by remember { mutableStateOf(false) }
     var editingWaypoint by remember { mutableStateOf<com.example.data.entity.WaypointEntity?>(null) }
     var showSavedWaypointsSheet by remember { mutableStateOf(false) }
     var showSettlementSearchSheet by remember { mutableStateOf(false) }
@@ -425,20 +428,64 @@ fun NavigationMainScreen(
                         }
                     }
 
-                    // Data Exchange (GPX / KML / .orntpack)
+                    // Data Exchange (GPX / KML / .orntpack).
+                    // While a region download runs this chip doubles as its progress indicator
+                    // and as the way back into the (minimised) progress dialog, so downloading
+                    // no longer blocks the map for hours.
+                    val activeDownload = downloadProgress
+                    val downloadFraction = activeDownload
+                        ?.takeIf { it.total > 0 }
+                        ?.let { it.done.toFloat() / it.total.toFloat() }
+                        ?: 0f
+
                     Surface(
-                        onClick = { showDataExchangeDialog = true },
+                        onClick = {
+                            if (activeDownload != null) {
+                                isDownloadMinimized = false
+                            } else {
+                                showDataExchangeDialog = true
+                            }
+                        },
                         color = Color(0xDD161C24),
                         shape = RoundedCornerShape(20.dp),
                         modifier = Modifier.testTag("data_exchange_button")
                     ) {
+                        Box {
+                            // Green fill showing how far the download has got.
+                            if (activeDownload != null) {
+                                Box(
+                                    modifier = Modifier
+                                        .matchParentSize()
+                                        .clip(RoundedCornerShape(20.dp))
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxHeight()
+                                            .fillMaxWidth(downloadFraction)
+                                            .background(Color(0x662E7D32))
+                                    )
+                                }
+                            }
+
                         Row(
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(Icons.Default.ImportExport, contentDescription = "Файлы", tint = Color(0xFF81C784), modifier = Modifier.size(16.dp))
+                            Icon(
+                                if (activeDownload != null) Icons.Default.Download else Icons.Default.ImportExport,
+                                contentDescription = "Файлы",
+                                tint = Color(0xFF81C784),
+                                modifier = Modifier.size(16.dp)
+                            )
                             Spacer(modifier = Modifier.width(3.dp))
-                            Text("Файлы", color = Color.White, fontSize = 11.sp)
+                            Text(
+                                text = if (activeDownload != null) {
+                                    "${(downloadFraction * 100).toInt()}%"
+                                } else "Файлы",
+                                color = Color.White,
+                                fontSize = 11.sp
+                            )
+                        }
                         }
                     }
 
@@ -938,6 +985,7 @@ fun NavigationMainScreen(
             estimateFor = { minZ, maxZ, layers -> viewModel.estimateRegion(minZ, maxZ, layers) },
             onStart = { minZ, maxZ, sources ->
                 showRegionDownloadDialog = false
+                isDownloadMinimized = false
                 viewModel.startRegionDownload(minZ, maxZ, sources)
                 viewModel.cancelRegionSelection()
             },
@@ -967,10 +1015,25 @@ fun NavigationMainScreen(
     }
 
     downloadProgress?.let { progress ->
-        RegionDownloadProgressDialog(
-            progress = progress,
-            onCancel = { viewModel.cancelRegionDownload() }
-        )
+        if (!isDownloadMinimized) {
+            RegionDownloadProgressDialog(
+                progress = progress,
+                onMinimize = { isDownloadMinimized = true },
+                onOpenFiles = {
+                    isDownloadMinimized = true
+                    showDataExchangeDialog = true
+                },
+                onCancel = {
+                    viewModel.cancelRegionDownload()
+                    isDownloadMinimized = false
+                }
+            )
+        }
+    }
+
+    // Reset the collapsed flag when a download ends, so the next one opens normally.
+    LaunchedEffect(downloadProgress == null) {
+        if (downloadProgress == null) isDownloadMinimized = false
     }
 
     if (showClearTilesConfirm) {
