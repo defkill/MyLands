@@ -950,11 +950,17 @@ fun NavigationMainScreen(
     val downloadResult by viewModel.downloadResult.collectAsStateWithLifecycle()
     LaunchedEffect(downloadResult) {
         val result = downloadResult ?: return@LaunchedEffect
+        val blocked = if (result.blockedSources.isNotEmpty()) {
+            " Не отвечали: ${result.blockedSources.joinToString(", ")}."
+        } else ""
+
         val msg = when {
-            result.cancelled -> "Загрузка остановлена. Загружено ${result.downloaded} тайлов"
+            result.cancelled ->
+                "Загрузка остановлена. Загружено ${result.downloaded} тайлов.$blocked"
             result.abortedByProvider ->
-                "Сервер карт перестал отвечать — загрузка прервана. Загружено ${result.downloaded}. Повторите позже."
-            else -> "Готово: ${result.downloaded} новых, ${result.skipped} уже были"
+                "Серверы карт не отвечают — загрузить не удалось.$blocked Повторите позже."
+            else ->
+                "Готово: ${result.downloaded} новых, ${result.skipped} уже были.$blocked"
         }
         Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
         viewModel.consumeDownloadResult()
