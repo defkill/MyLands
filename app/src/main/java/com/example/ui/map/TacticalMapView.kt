@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Paint as AndroidPaint
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
@@ -24,6 +25,7 @@ import com.example.data.entity.TrackPointEntity
 import com.example.data.entity.WaypointEntity
 import com.example.geodesy.GeodesyEngine
 import com.example.map.MapProjection
+import com.example.map.RegionBounds
 import com.example.map.TileCoordinate
 import com.example.map.TileManager
 import com.example.map.TileSource
@@ -54,6 +56,9 @@ fun TacticalMapView(
     savedRoutes: List<RouteEntity> = emptyList(),
     triangulationState: TriangulationState = TriangulationState(),
     savedTrackPoints: Map<Long, List<TrackPointEntity>> = emptyMap(),
+    isSelectingRegion: Boolean = false,
+    regionSelection: RegionBounds? = null,
+    onRegionSelected: (RegionBounds) -> Unit = {},
     activeTrackPoints: List<TrackPointEntity>,
     angleUnit: AngleUnit,
     modifier: Modifier = Modifier
@@ -152,6 +157,37 @@ fun TacticalMapView(
                     }
                 }
             }
+            .pointerInput(isSelectingRegion) {
+                // Only active in selection mode, so normal panning is untouched otherwise.
+                if (!isSelectingRegion) return@pointerInput
+
+                var startGeo: GeoPoint? = null
+                detectDragGestures(
+                    onDragStart = { offset ->
+                        startGeo = MapProjection.screenToGeo(
+                            offset.x, offset.y,
+                            currentCenter.latitude, currentCenter.longitude, currentZoom,
+                            size.width.toFloat(), size.height.toFloat()
+                        )
+                    },
+                    onDrag = { change, _ ->
+                        val start = startGeo ?: return@detectDragGestures
+                        val now = MapProjection.screenToGeo(
+                            change.position.x, change.position.y,
+                            currentCenter.latitude, currentCenter.longitude, currentZoom,
+                            size.width.toFloat(), size.height.toFloat()
+                        )
+                        onRegionSelected(
+                            RegionBounds(
+                                minLat = minOf(start.latitude, now.latitude),
+                                maxLat = maxOf(start.latitude, now.latitude),
+                                minLon = minOf(start.longitude, now.longitude),
+                                maxLon = maxOf(start.longitude, now.longitude)
+                            )
+                        )
+                    }
+                )
+            }
             .pointerInput(Unit) {
                 detectTransformGestures { _, pan, gestureZoom, _ ->
                     if (gestureZoom != 1.0f) {
@@ -215,6 +251,11 @@ fun TacticalMapView(
         // 5. Draw triangulation rays and their crossing point
         if (triangulationState.isActive && triangulationState.rays.isNotEmpty()) {
             drawTriangulation(triangulationState, center, zoom, width, height)
+        }
+
+        // 5b. Draw the region selection rectangle
+        if (regionSelection != null) {
+            drawRegionSelection(regionSelection, center, zoom, width, height)
         }
 
         // 6. Draw Ruler
@@ -456,6 +497,40 @@ private fun DrawScope.drawTriangulation(
         drawLine(hit, Offset(ix - 26f, iy), Offset(ix + 26f, iy), strokeWidth = 3f)
         drawLine(hit, Offset(ix, iy - 26f), Offset(ix, iy + 26f), strokeWidth = 3f)
     }
+}
+
+private fun DrawScope.drawRegionSelection(
+    bounds: RegionBounds,
+    center: GeoPoint,
+    zoom: Double,
+    width: Float,
+    height: Float
+) {
+    val (x1, y1) = MapProjection.geoToScreen(
+        GeoPoint(bounds.maxLat, bounds.minLon),
+        center.latitude, center.longitude, zoom, width, height
+    )
+    val (x2, y2) = MapProjection.geoToScreen(
+        GeoPoint(bounds.minLat, bounds.maxLon),
+        center.latitude, center.longitude, zoom, width, height
+    )
+
+    val left = minOf(x1, x2)
+    val top = minOf(y1, y2)
+    val w = kotlin.math.abs(x2 - x1)
+    val h = kotlin.math.abs(y2 - y1)
+
+    drawRect(
+        color = Color(0x3300E5FF),
+        topLeft = Offset(left, top),
+        size = androidx.compose.ui.geometry.Size(w, h)
+    )
+    drawRect(
+        color = Color(0xFF00E5FF),
+        topLeft = Offset(left, top),
+        size = androidx.compose.ui.geometry.Size(w, h),
+        style = Stroke(3f)
+    )
 }
 
 private fun DrawScope.drawSavedRoutes(
