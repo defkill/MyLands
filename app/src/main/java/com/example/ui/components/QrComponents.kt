@@ -100,7 +100,7 @@ fun QrCodeDialog(
                         androidx.compose.foundation.Image(
                             bitmap = bitmap.asImageBitmap(),
                             contentDescription = "QR-код точки",
-                            contentScale = ContentScale.FitWidth,
+                            contentScale = ContentScale.FillWidth,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .aspectRatio(1f)
