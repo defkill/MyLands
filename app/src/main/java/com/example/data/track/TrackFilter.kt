@@ -2,6 +2,7 @@ package com.example.data.track
 
 import com.example.data.entity.TrackPointEntity
 import com.example.geodesy.GeodesyEngine
+import com.example.model.GeoPoint
 
 /**
  * Removes GPS outliers from a recorded track.
@@ -37,6 +38,14 @@ object TrackFilter {
 
     /** Walking speed ceiling used to sanity-check dead-reckoning legs. */
     const val MAX_WALKING_SPEED_MPS = 3.0
+
+    /**
+     * Bounds on the rubber-band scale factor. A correction far outside this range means the
+     * inputs were wrong rather than the step length, and stretching the leg to match would do
+     * more harm than leaving it.
+     */
+    const val MIN_RUBBER_SCALE = 0.4
+    const val MAX_RUBBER_SCALE = 2.5
 
     /**
      * How many later fixes must agree with a suspicious jump before it is accepted.
@@ -143,7 +152,8 @@ object TrackFilter {
             }
         }
 
-        return Result(kept, rawDistance(kept), rejected)
+        val corrected = closeDeadReckoningGaps(kept)
+        return Result(corrected, rawDistance(corrected), rejected)
     }
 
     /**
@@ -169,6 +179,102 @@ object TrackFilter {
             i++
         }
         return false
+    }
+
+
+    /**
+     * Rubber-bands dead-reckoning legs onto the GPS fixes that bracket them.
+     *
+     * A blind leg accumulates two kinds of error: a rotation (the phone's carry angle and
+     * magnetic disturbance) and a scale error (the assumed step length). When the signal comes
+     * back we know where the leg truly started and truly ended, so the whole leg can be rotated
+     * and scaled about its anchor to meet both. The shape of the walk — which is the part dead
+     * reckoning gets right — is preserved.
+     *
+     * Only legs with a GPS fix on BOTH sides can be corrected; an open-ended leg (signal never
+     * returned) is left exactly as recorded, because there is nothing to align it to.
+     */
+    private fun closeDeadReckoningGaps(points: List<TrackPointEntity>): List<TrackPointEntity> {
+        if (points.size < 3) return points
+
+        val result = points.toMutableList()
+        var i = 0
+
+        while (i < result.size) {
+            if (result[i].source != TrackPointEntity.SOURCE_DEAD_RECKONING) {
+                i++
+                continue
+            }
+
+            val legStart = i
+            var legEnd = i
+            while (legEnd + 1 < result.size &&
+                result[legEnd + 1].source == TrackPointEntity.SOURCE_DEAD_RECKONING
+            ) {
+                legEnd++
+            }
+
+            val anchor = result.getOrNull(legStart - 1)
+            val closing = result.getOrNull(legEnd + 1)
+
+            if (anchor != null && closing != null &&
+                anchor.source != TrackPointEntity.SOURCE_DEAD_RECKONING &&
+                closing.source != TrackPointEntity.SOURCE_DEAD_RECKONING
+            ) {
+                applyRubberBand(result, legStart, legEnd, anchor, closing)
+            }
+
+            i = legEnd + 1
+        }
+
+        return result
+    }
+
+    private fun applyRubberBand(
+        points: MutableList<TrackPointEntity>,
+        legStart: Int,
+        legEnd: Int,
+        anchor: TrackPointEntity,
+        closing: TrackPointEntity
+    ) {
+        val last = points[legEnd]
+
+        val estimatedDistance = GeodesyEngine.distanceMeters(
+            anchor.latitude, anchor.longitude, last.latitude, last.longitude
+        )
+        val trueDistance = GeodesyEngine.distanceMeters(
+            anchor.latitude, anchor.longitude, closing.latitude, closing.longitude
+        )
+
+        // Too short to infer anything reliable; a tiny estimated vector makes the rotation
+        // meaningless and the scale explode.
+        if (estimatedDistance < 5.0) return
+
+        val estimatedBearing = GeodesyEngine.azimuthDegrees(
+            anchor.latitude, anchor.longitude, last.latitude, last.longitude
+        )
+        val trueBearing = GeodesyEngine.azimuthDegrees(
+            anchor.latitude, anchor.longitude, closing.latitude, closing.longitude
+        )
+
+        val rotation = trueBearing - estimatedBearing
+        val scale = (trueDistance / estimatedDistance).coerceIn(MIN_RUBBER_SCALE, MAX_RUBBER_SCALE)
+
+        for (index in legStart..legEnd) {
+            val p = points[index]
+            val d = GeodesyEngine.distanceMeters(
+                anchor.latitude, anchor.longitude, p.latitude, p.longitude
+            )
+            val b = GeodesyEngine.azimuthDegrees(
+                anchor.latitude, anchor.longitude, p.latitude, p.longitude
+            )
+            val moved = GeodesyEngine.destinationPoint(
+                GeoPoint(anchor.latitude, anchor.longitude),
+                d * scale,
+                b + rotation
+            )
+            points[index] = p.copy(latitude = moved.latitude, longitude = moved.longitude)
+        }
     }
 
     private fun rawDistance(points: List<TrackPointEntity>): Double {
