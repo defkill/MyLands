@@ -18,6 +18,11 @@ import com.example.map.MapProjection
 import com.example.map.MbtilesTileSource
 import com.example.map.OfflineMapDetector
 import com.example.map.OfflineMapFormat
+import com.example.map.RegionBounds
+import com.example.map.RegionDownloader
+import com.example.map.DownloadEstimate
+import com.example.map.DownloadProgress
+import kotlinx.coroutines.Job
 import com.example.map.TileCoordinate
 import com.example.map.TileManager
 import com.example.map.TileSource
@@ -430,6 +435,77 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         return source
+    }
+
+    // --- Region download (select an area and fetch it slowly) ---
+
+    /** Rectangle the user is drawing/has drawn on the map, or null when not selecting. */
+    private val _regionSelection = MutableStateFlow<RegionBounds?>(null)
+    val regionSelection: StateFlow<RegionBounds?> = _regionSelection.asStateFlow()
+
+    private val _isSelectingRegion = MutableStateFlow(false)
+    val isSelectingRegion: StateFlow<Boolean> = _isSelectingRegion.asStateFlow()
+
+    private val _downloadProgress = MutableStateFlow<DownloadProgress?>(null)
+    val downloadProgress: StateFlow<DownloadProgress?> = _downloadProgress.asStateFlow()
+
+    private var downloadJob: Job? = null
+    @Volatile private var cancelDownloadRequested = false
+
+    fun startRegionSelection() {
+        _isSelectingRegion.value = true
+        _regionSelection.value = null
+    }
+
+    fun cancelRegionSelection() {
+        _isSelectingRegion.value = false
+        _regionSelection.value = null
+    }
+
+    fun setRegionSelection(bounds: RegionBounds) {
+        _regionSelection.value = bounds
+    }
+
+    fun estimateRegion(minZoom: Int, maxZoom: Int, layerCount: Int): DownloadEstimate? {
+        val bounds = _regionSelection.value ?: return null
+        return RegionDownloader.estimate(bounds, minZoom, maxZoom, layerCount)
+    }
+
+    /**
+     * Downloads the selected region for the chosen layers, slowly and resumably.
+     *
+     * Deliberately throttled: providers block clients that pull regions fast, and a ban in the
+     * field is far worse than a download that takes a while. Already-stored tiles are skipped,
+     * so re-running after an interruption continues where it left off.
+     */
+    fun startRegionDownload(
+        minZoom: Int,
+        maxZoom: Int,
+        sources: List<TileSource>,
+        onFinished: (RegionDownloader.Result) -> Unit
+    ) {
+        val bounds = _regionSelection.value ?: return
+        if (downloadJob?.isActive == true) return
+
+        cancelDownloadRequested = false
+        downloadJob = viewModelScope.launch(Dispatchers.IO) {
+            val result = RegionDownloader.download(
+                baseDir = tileManager.baseCacheDir,
+                bounds = bounds,
+                minZoom = minZoom,
+                maxZoom = maxZoom,
+                sources = sources,
+                isCancelled = { cancelDownloadRequested },
+                onProgress = { _downloadProgress.value = it }
+            )
+            _downloadProgress.value = null
+            tileManager.clearMemoryCache()
+            onFinished(result)
+        }
+    }
+
+    fun cancelRegionDownload() {
+        cancelDownloadRequested = true
     }
 
     /** Progress of an .orntpack merge, or null when no import is running. */
