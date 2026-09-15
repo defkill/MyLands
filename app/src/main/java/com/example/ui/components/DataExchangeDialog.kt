@@ -229,7 +229,7 @@ fun DataExchangeDialog(
                 )
 
                 Text(
-                    text = "Поддерживаются .mbtiles (QGIS, SAS.Planet) и .orntpack — формат обмена между устройствами. Тип определяется автоматически.",
+                    text = "Поддерживаются .mbtiles (QGIS, SAS.Planet) и .orntpack. Импортированный .orntpack сливается с уже сохранёнными картами, поэтому следующий выгруженный файл будет содержать и его, и новые тайлы.",
                     color = Color(0xFF90A4AE),
                     fontSize = 11.sp
                 )
@@ -301,11 +301,11 @@ fun DataExchangeDialog(
                 val cacheStats = remember(isProcessing) { viewModel.tileManager.getCacheStats() }
                 Text(
                     text = if (cacheStats.first == 0) {
-                        "Кэш пуст — карты сохраняются автоматически при просмотре онлайн."
+                        "Карт пока нет — они сохраняются автоматически при просмотре онлайн."
                     } else {
                         String.format(
                             java.util.Locale.US,
-                            "В кэше %d тайлов (%.1f МБ) — сохранены при просмотре карты онлайн.",
+                            "Сохранено %d тайлов (%.1f МБ). Импортированные карты добавляются сюда же.",
                             cacheStats.first,
                             cacheStats.second / 1024.0 / 1024.0
                         )
@@ -340,7 +340,7 @@ fun DataExchangeDialog(
                 ) {
                     Icon(Icons.Default.Archive, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color(0xFFFFB74D))
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Собрать кэш карт в файл и отправить")
+                    Text("Собрать все карты в файл и отправить")
                 }
             }
         },
