@@ -679,11 +679,12 @@ class TrackingService : Service() {
                         "GPS: ${if (gpsLive) "есть" else "нет — счисление"}\n" +
                         "Курс: ${orientationManager.headingAgeMillis() / 1000}с назад" +
                         (if (stepDetectorManager.pdrState.value.isHeadingStale) " — УСТАРЕЛ" else "") +
-                        "\n" + if (stepDetectorManager.isHeadingOffsetCalibrated) {
-                            "Поправка на карман: ${stepDetectorManager.headingOffsetDeg.toInt()}°"
+                        "\n" + (if (stepDetectorManager.isHeadingOffsetCalibrated) {
+                            "Поправка: ${stepDetectorManager.headingOffsetDeg.toInt()}°"
                         } else {
-                            "Поправка на карман: не откалибрована"
-                        }
+                            "Поправка: нет"
+                        }) + " • шаг ${"%.2f".format(stepDetectorManager.stepLengthMeters)} м" +
+                        (if (stepDetectorManager.isStepLengthCalibrated) "" else " (по умолчанию)")
                 )
             )
             .setSubText("Фоновая запись")
