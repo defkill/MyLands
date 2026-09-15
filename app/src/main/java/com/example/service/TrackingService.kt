@@ -24,6 +24,7 @@ import com.example.data.entity.TrackPointEntity
 import com.example.model.GeoPoint
 import com.example.sensor.GpsStatus
 import com.example.data.track.TrackFilter
+import com.example.geodesy.GeodesyEngine
 import com.example.sensor.LocationTracker
 import com.example.sensor.OrientationManager
 import com.example.sensor.StepDetectorManager
@@ -98,6 +99,9 @@ class TrackingService : Service() {
     private var currentTrackId: Long = 0L
     private var currentTrackName: String = "Трек"
     private var lastGpsTimestamp: Long = 0L
+
+    /** Last GPS fix trusted enough to anchor dead reckoning on. */
+    private var lastGoodFix: GeoPoint? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -249,7 +253,25 @@ class TrackingService : Service() {
                             loc.altitude ?: 0.0
                         )
                         val heading = loc.bearingDeg ?: orientationManager.orientationData.value.trueHeadingDeg
-                        stepDetectorManager.updateGpsAnchor(loc, now, heading)
+
+                        // Anchor dead reckoning only on fixes we trust. Anchoring on an outlier
+                        // shifts the entire subsequent blind leg by the size of that error, so
+                        // a correctly walked path ends up drawn far from reality.
+                        val acc = loc.accuracy
+                        val accurateEnough = acc == null || acc <= TrackFilter.MAX_ACCURACY_METERS
+                        val prevGood = lastGoodFix
+                        val plausible = prevGood == null || run {
+                            val d = GeodesyEngine.distanceMeters(
+                                prevGood.latitude, prevGood.longitude, loc.latitude, loc.longitude
+                            )
+                            val dt = (loc.timestamp - prevGood.timestamp) / 1000.0
+                            dt <= 0.0 || d / dt <= TrackFilter.MAX_SPEED_MPS
+                        }
+
+                        if (accurateEnough && plausible) {
+                            lastGoodFix = loc
+                            stepDetectorManager.updateGpsAnchor(loc, now, heading)
+                        }
                         lastGpsTimestamp = now
                         val pt = TrackPointEntity(
                             trackId = currentTrackId,
