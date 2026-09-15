@@ -19,6 +19,7 @@ import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
+import com.example.data.elevation.LineOfSightResult
 import com.example.data.entity.RouteEntity
 import com.example.data.entity.RouteLeg
 import com.example.data.entity.TrackPointEntity
@@ -59,6 +60,7 @@ fun TacticalMapView(
     isSelectingRegion: Boolean = false,
     regionSelection: RegionBounds? = null,
     onRegionSelected: (RegionBounds) -> Unit = {},
+    losResult: LineOfSightResult? = null,
     activeTrackPoints: List<TrackPointEntity>,
     angleUnit: AngleUnit,
     modifier: Modifier = Modifier
@@ -266,6 +268,11 @@ fun TacticalMapView(
             drawRegionSelection(regionSelection, center, zoom, width, height)
         }
 
+        // 5c. Draw the line-of-sight ray, green where it clears and red where terrain blocks it
+        if (losResult != null) {
+            drawLineOfSight(losResult, center, zoom, width, height)
+        }
+
         // 6. Draw Ruler
         if (rulerState.isActive && rulerState.startPoint != null && rulerState.endPoint != null) {
             drawRuler(rulerState, center, zoom, width, height, angleUnit)
@@ -448,6 +455,42 @@ private fun DrawScope.drawTrackPoints(
             strokeWidth = 6f,
             pathEffect = effect
         )
+    }
+}
+
+private fun DrawScope.drawLineOfSight(
+    result: LineOfSightResult,
+    center: GeoPoint,
+    zoom: Double,
+    width: Float,
+    height: Float
+) {
+    val samples = result.samples
+    if (samples.size < 2) return
+
+    for (i in 0 until samples.size - 1) {
+        val a = samples[i]
+        val b = samples[i + 1]
+        val (ax, ay) = MapProjection.geoToScreen(
+            a.point, center.latitude, center.longitude, zoom, width, height
+        )
+        val (bx, by) = MapProjection.geoToScreen(
+            b.point, center.latitude, center.longitude, zoom, width, height
+        )
+        drawLine(
+            color = if (a.isBlocked || b.isBlocked) Color(0xFFE53935) else Color(0xFF66BB6A),
+            start = Offset(ax, ay),
+            end = Offset(bx, by),
+            strokeWidth = 6f
+        )
+    }
+
+    // Mark the summit that closes the view
+    result.worstObstacle?.let { o ->
+        val (ox, oy) = MapProjection.geoToScreen(
+            o.point, center.latitude, center.longitude, zoom, width, height
+        )
+        drawCircle(Color(0xFFFFB74D), radius = 12f, center = Offset(ox, oy), style = Stroke(4f))
     }
 }
 
