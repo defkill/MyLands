@@ -24,7 +24,9 @@ data class PdrState(
     val totalSteps: Int = 0,
     val totalDistanceMeters: Double = 0.0,
     val lastEstimatedPosition: GeoPoint? = null,
-    val isDeadReckoningActive: Boolean = false
+    val isDeadReckoningActive: Boolean = false,
+    /** Steps are arriving but the heading is stale, so they cannot be placed on the map. */
+    val isHeadingStale: Boolean = false
 )
 
 enum class PdrFlushReason {
@@ -162,6 +164,20 @@ class StepDetectorManager(
         sensorManager.unregisterListener(this)
     }
 
+    /**
+     * Age of the last heading update, supplied by the orientation source. Steps are still
+     * counted when the heading is stale, but they are not projected onto the map: a frozen
+     * heading turns an entire walk into one long straight line pointing nowhere, which is worse
+     * than a gap because it looks like real data.
+     */
+    @Volatile
+    var headingAgeProvider: (() -> Long)? = null
+
+    private fun headingIsStale(): Boolean {
+        val age = headingAgeProvider?.invoke() ?: return false
+        return age > MAX_HEADING_AGE_MS
+    }
+
     fun updateCurrentHeading(headingDeg: Float) {
         currentHeadingDeg = headingDeg
     }
@@ -236,6 +252,15 @@ class StepDetectorManager(
      * No GeodesyEngine calculation or DB operation on individual steps.
      */
     fun registerStep(timestamp: Long = System.currentTimeMillis()) {
+        if (headingIsStale()) {
+            // Count the step for statistics, but do not move the estimated position.
+            _pdrState.value = _pdrState.value.copy(
+                totalSteps = _pdrState.value.totalSteps + 1,
+                isHeadingStale = true
+            )
+            return
+        }
+
         val rad = Math.toRadians(currentHeadingDeg.toDouble())
         val dx = stepLengthMeters * sin(rad)
         val dy = stepLengthMeters * cos(rad)
@@ -255,7 +280,8 @@ class StepDetectorManager(
             totalSteps = newSteps,
             totalDistanceMeters = newDistance,
             lastEstimatedPosition = estimatedPoint,
-            isDeadReckoningActive = true
+            isDeadReckoningActive = true,
+            isHeadingStale = false
         )
 
         onStepDetected?.invoke(estimatedPoint, currentHeadingDeg)
@@ -374,6 +400,9 @@ class StepDetectorManager(
 
     companion object {
         private const val TAG = "StepDetectorManager"
+
+        /** Heading older than this is treated as unusable for projecting steps. */
+        const val MAX_HEADING_AGE_MS = 15_000L
 
         /**
          * Calculates angular difference [0..180] degrees between two azimuths.
