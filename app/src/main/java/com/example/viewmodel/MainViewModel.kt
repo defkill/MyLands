@@ -150,6 +150,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         orientationManager.start()
         locationTracker.startListening()
         stepDetectorManager.start()
+        stepDetectorManager.headingAgeProvider = { orientationManager.headingAgeMillis() }
 
         // Sync location with map center if following
         viewModelScope.launch {
