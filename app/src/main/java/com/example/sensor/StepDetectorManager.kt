@@ -169,6 +169,28 @@ class StepDetectorManager(
         isHeadingOffsetCalibrated = offsetSamples >= MIN_CALIBRATION_SAMPLES
     }
 
+    /**
+     * Refines the assumed step length from real movement.
+     *
+     * Everyone's stride differs, and a wrong default stretches or shrinks the whole blind leg.
+     * While GPS is available we know both the distance covered and the steps taken, so the
+     * value can be measured instead of guessed.
+     */
+    fun submitStepLengthCalibration(distanceMeters: Double, steps: Int) {
+        if (steps < MIN_STEPS_FOR_LENGTH_CALIBRATION) return
+        val measured = (distanceMeters / steps).toFloat()
+        if (measured < MIN_PLAUSIBLE_STEP_M || measured > MAX_PLAUSIBLE_STEP_M) return
+
+        // Smooth rather than jump, so one odd stretch does not skew the value.
+        stepLengthMeters = stepLengthMeters * 0.8f + measured * 0.2f
+        isStepLengthCalibrated = true
+        Log.d(TAG, "Step length now ${"%.2f".format(stepLengthMeters)} m (measured $measured)")
+    }
+
+    @Volatile
+    var isStepLengthCalibrated: Boolean = false
+        private set
+
     fun resetHeadingCalibration() {
         offsetSinSum = 0.0
         offsetCosSum = 0.0
@@ -468,6 +490,13 @@ class StepDetectorManager(
 
         /** Below this the offset is not trusted yet and raw device heading is used. */
         const val MIN_CALIBRATION_SAMPLES = 5
+
+        /** Fewer steps than this gives too noisy a stride estimate. */
+        const val MIN_STEPS_FOR_LENGTH_CALIBRATION = 20
+
+        /** Human stride bounds; anything outside means the inputs were wrong. */
+        const val MIN_PLAUSIBLE_STEP_M = 0.4f
+        const val MAX_PLAUSIBLE_STEP_M = 1.1f
 
         /** Heading older than this is treated as unusable for projecting steps. */
         const val MAX_HEADING_AGE_MS = 15_000L
