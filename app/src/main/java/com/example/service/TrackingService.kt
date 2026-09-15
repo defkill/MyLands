@@ -188,6 +188,7 @@ class TrackingService : Service() {
         locationTracker.startListening()
         orientationManager.start()
         stepDetectorManager.start()
+        stepDetectorManager.headingAgeProvider = { orientationManager.headingAgeMillis() }
 
         // Brief per-event wake locks only work if something wakes the CPU in the first place.
         // With a wake-up step detector the sensor itself does that. Without one, step events
@@ -638,7 +639,9 @@ class TrackingService : Service() {
                 NotificationCompat.BigTextStyle().bigText(
                     "Точек: $pointsCount • $trackName\n" +
                         "Шагов: $steps (в буфере $pending) • датчик: $sensorKind\n" +
-                        "GPS: ${if (gpsLive) "есть" else "нет — счисление"}"
+                        "GPS: ${if (gpsLive) "есть" else "нет — счисление"}\n" +
+                        "Курс: ${orientationManager.headingAgeMillis() / 1000}с назад" +
+                        if (stepDetectorManager.pdrState.value.isHeadingStale) " — УСТАРЕЛ" else ""
                 )
             )
             .setSubText("Фоновая запись")
