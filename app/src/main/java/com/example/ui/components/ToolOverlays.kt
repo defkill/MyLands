@@ -132,6 +132,7 @@ fun RouteBuilderPanel(
     onRouteNameChanged: (String) -> Unit,
     onSaveRoute: () -> Unit,
     onLoadRoute: (RouteEntity) -> Unit,
+    onShowProfile: (RouteEntity) -> Unit,
     onDeleteRoute: (RouteEntity) -> Unit,
     onCancel: () -> Unit,
     modifier: Modifier = Modifier
@@ -299,6 +300,17 @@ fun RouteBuilderPanel(
                                         color = Color(0xFF81C784),
                                         fontSize = 11.sp,
                                         fontFamily = FontFamily.Monospace
+                                    )
+                                }
+                                IconButton(
+                                    onClick = { onShowProfile(route) },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Terrain,
+                                        contentDescription = "Профиль высот",
+                                        tint = Color(0xFF80DEEA),
+                                        modifier = Modifier.size(18.dp)
                                     )
                                 }
                                 IconButton(
