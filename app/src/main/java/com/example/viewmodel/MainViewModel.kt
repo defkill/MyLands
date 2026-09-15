@@ -432,6 +432,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return source
     }
 
+    /** Progress of an .orntpack merge, or null when no import is running. */
+    private val _packImportProgress = MutableStateFlow<TileManager.ImportProgress?>(null)
+    val packImportProgress: StateFlow<TileManager.ImportProgress?> = _packImportProgress.asStateFlow()
+
+    /**
+     * Merges an .orntpack into local tile storage so its tiles join everything already
+     * downloaded. Subsequent exports then contain both, letting a shared map file keep growing.
+     *
+     * @return number of newly added tiles, or null on failure.
+     */
+    suspend fun importOrntpackMerging(file: File): Int? {
+        return try {
+            _packImportProgress.value = TileManager.ImportProgress(0, 0)
+            val added = tileManager.importOfflinePackage(file) { progress ->
+                _packImportProgress.value = progress
+            }
+            _hasOfflineOrntpack.value = true
+            added
+        } catch (e: Exception) {
+            null
+        } finally {
+            _packImportProgress.value = null
+        }
+    }
+
     /**
      * Imports an offline map file (.orntpack / .zip or .mbtiles),
      * automatically detecting the format by extension and content header.
