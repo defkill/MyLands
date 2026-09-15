@@ -22,7 +22,6 @@ import com.example.map.RegionBounds
 import com.example.map.RegionDownloader
 import com.example.map.DownloadEstimate
 import com.example.map.DownloadProgress
-import kotlinx.coroutines.Job
 import com.example.map.TileCoordinate
 import com.example.map.TileManager
 import com.example.map.TileSource
@@ -33,6 +32,7 @@ import com.example.sensor.OrientationData
 import com.example.sensor.OrientationManager
 import com.example.sensor.PdrState
 import com.example.sensor.StepDetectorManager
+import com.example.service.MapDownloadService
 import com.example.service.TrackingService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
@@ -446,11 +446,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _isSelectingRegion = MutableStateFlow(false)
     val isSelectingRegion: StateFlow<Boolean> = _isSelectingRegion.asStateFlow()
 
-    private val _downloadProgress = MutableStateFlow<DownloadProgress?>(null)
-    val downloadProgress: StateFlow<DownloadProgress?> = _downloadProgress.asStateFlow()
-
-    private var downloadJob: Job? = null
-    @Volatile private var cancelDownloadRequested = false
+    val downloadProgress: StateFlow<DownloadProgress?> = MapDownloadService.progress
+    val downloadResult: StateFlow<RegionDownloader.Result?> = MapDownloadService.lastResult
 
     fun startRegionSelection() {
         _isSelectingRegion.value = true
@@ -478,34 +475,37 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * field is far worse than a download that takes a while. Already-stored tiles are skipped,
      * so re-running after an interruption continues where it left off.
      */
+    /**
+     * Hands the download to a foreground service.
+     *
+     * Running it in the ViewModel stalled the moment the screen went off, and a throttled region
+     * download can run for hours — that needs a service the system will keep alive.
+     */
     fun startRegionDownload(
         minZoom: Int,
         maxZoom: Int,
-        sources: List<TileSource>,
-        onFinished: (RegionDownloader.Result) -> Unit
+        sources: List<TileSource>
     ) {
         val bounds = _regionSelection.value ?: return
-        if (downloadJob?.isActive == true) return
+        if (MapDownloadService.isRunning.value) return
 
-        cancelDownloadRequested = false
-        downloadJob = viewModelScope.launch(Dispatchers.IO) {
-            val result = RegionDownloader.download(
-                baseDir = tileManager.baseCacheDir,
-                bounds = bounds,
-                minZoom = minZoom,
-                maxZoom = maxZoom,
-                sources = sources,
-                isCancelled = { cancelDownloadRequested },
-                onProgress = { _downloadProgress.value = it }
-            )
-            _downloadProgress.value = null
-            tileManager.clearMemoryCache()
-            onFinished(result)
-        }
+        MapDownloadService.start(
+            context = getApplication(),
+            baseDir = tileManager.baseCacheDir,
+            bounds = bounds,
+            minZoom = minZoom,
+            maxZoom = maxZoom,
+            sources = sources
+        )
     }
 
     fun cancelRegionDownload() {
-        cancelDownloadRequested = true
+        MapDownloadService.cancel(getApplication())
+    }
+
+    fun consumeDownloadResult() {
+        MapDownloadService.consumeResult()
+        tileManager.clearMemoryCache()
     }
 
     /** Progress of an .orntpack merge, or null when no import is running. */
