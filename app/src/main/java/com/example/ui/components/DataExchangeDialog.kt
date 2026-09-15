@@ -71,6 +71,38 @@ fun DataExchangeDialog(
         }
     }
 
+    // Elevation tiles (.hgt or the .zip they ship in).
+    val importElevationLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            coroutineScope.launch {
+                isProcessing = true
+                try {
+                    val displayName = getFileNameFromUri(context, uri)
+                    val temp = File(context.cacheDir, displayName.ifBlank { "elevation.hgt" })
+                    withContext(Dispatchers.IO) {
+                        context.contentResolver.openInputStream(uri)?.use { input ->
+                            temp.outputStream().use { out -> input.copyTo(out) }
+                        }
+                    }
+                    val added = viewModel.importElevationFile(temp, displayName)
+                    temp.delete()
+                    Toast.makeText(
+                        context,
+                        if (added > 0) "Добавлено квадратов рельефа: $added"
+                        else "Новых квадратов нет (уже загружены или формат не .hgt)",
+                        Toast.LENGTH_LONG
+                    ).show()
+                } catch (e: Exception) {
+                    Toast.makeText(context, "Ошибка импорта рельефа: ${e.message}", Toast.LENGTH_LONG).show()
+                } finally {
+                    isProcessing = false
+                }
+            }
+        }
+    }
+
     val importMapLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
@@ -358,6 +390,43 @@ fun DataExchangeDialog(
                     color = Color(0xFF78909C),
                     fontSize = 11.sp
                 )
+
+                HorizontalDivider(color = Color(0xFF37474F))
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Text(
+                    "РЕЛЬЕФ (SRTM / .HGT)",
+                    color = Color(0xFF80DEEA),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+
+                // Tell the user exactly which squares their area needs: working out that it is
+                // "N50E036" from a map is not obvious.
+                val (needed, missing) = remember(isProcessing) { viewModel.elevationTilesForCurrentView() }
+                Text(
+                    text = if (missing.isEmpty()) {
+                        "Для текущей области есть всё: ${needed.joinToString(", ")}"
+                    } else {
+                        "Для текущей области нужны: ${needed.joinToString(", ")}\nОтсутствуют: ${missing.joinToString(", ")}"
+                    },
+                    color = if (missing.isEmpty()) Color(0xFF81C784) else Color(0xFFFFB74D),
+                    fontSize = 11.sp
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+
+                OutlinedButton(
+                    onClick = { importElevationLauncher.launch(arrayOf("*/*")) },
+                    modifier = Modifier.fillMaxWidth().testTag("import_elevation_button"),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
+                ) {
+                    Icon(Icons.Default.Terrain, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color(0xFF80DEEA))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Импортировать рельеф (.hgt / .zip)")
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
 
                 // 5. Pack all stored tiles to .orntpack — save to a folder
                 OutlinedButton(
