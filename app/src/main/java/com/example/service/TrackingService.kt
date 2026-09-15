@@ -45,6 +45,9 @@ class TrackingService : Service() {
 
     companion object {
         private const val TAG = "TrackingService"
+
+        /** Below this speed the GPS course is noise and must not calibrate the carry offset. */
+        private const val MIN_CALIBRATION_SPEED_MPS = 0.8f
         const val ACTION_START_TRACKING = "com.example.service.action.START_TRACKING"
         const val ACTION_STOP_TRACKING = "com.example.service.action.STOP_TRACKING"
         const val ACTION_CHECKPOINT_ALARM = "com.example.service.action.CHECKPOINT_ALARM"
@@ -271,6 +274,18 @@ class TrackingService : Service() {
                         if (accurateEnough && plausible) {
                             lastGoodFix = loc
                             stepDetectorManager.updateGpsAnchor(loc, now, heading)
+
+                            // Learn the phone's carry offset from real movement, so the blind
+                            // leg follows the direction of travel and not wherever the device
+                            // happens to be pointing in a pocket.
+                            val course = loc.bearingDeg
+                            val speed = loc.speedMps
+                            if (course != null && speed != null && speed >= MIN_CALIBRATION_SPEED_MPS) {
+                                stepDetectorManager.submitHeadingCalibration(
+                                    gpsCourseDeg = course,
+                                    deviceHeadingDeg = orientationManager.orientationData.value.trueHeadingDeg
+                                )
+                            }
                         }
                         lastGpsTimestamp = now
                         val pt = TrackPointEntity(
@@ -663,7 +678,12 @@ class TrackingService : Service() {
                         "Шагов: $steps (в буфере $pending) • датчик: $sensorKind\n" +
                         "GPS: ${if (gpsLive) "есть" else "нет — счисление"}\n" +
                         "Курс: ${orientationManager.headingAgeMillis() / 1000}с назад" +
-                        if (stepDetectorManager.pdrState.value.isHeadingStale) " — УСТАРЕЛ" else ""
+                        (if (stepDetectorManager.pdrState.value.isHeadingStale) " — УСТАРЕЛ" else "") +
+                        "\n" + if (stepDetectorManager.isHeadingOffsetCalibrated) {
+                            "Поправка на карман: ${stepDetectorManager.headingOffsetDeg.toInt()}°"
+                        } else {
+                            "Поправка на карман: не откалибрована"
+                        }
                 )
             )
             .setSubText("Фоновая запись")
