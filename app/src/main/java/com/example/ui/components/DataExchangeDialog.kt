@@ -79,7 +79,7 @@ fun DataExchangeDialog(
             coroutineScope.launch {
                 isProcessing = true
                 try {
-                    val displayName = getFileNameFromUri(context, uri)
+                    val displayName = queryDisplayName(context, uri)
                     val temp = File(context.cacheDir, displayName.ifBlank { "elevation.hgt" })
                     withContext(Dispatchers.IO) {
                         context.contentResolver.openInputStream(uri)?.use { input ->
@@ -529,4 +529,23 @@ internal fun shareFile(context: Context, file: File, mimeType: String, chooserTi
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
     context.startActivity(Intent.createChooser(shareIntent, chooserTitle))
+}
+
+
+/**
+ * File name behind a SAF uri. Local copy because the helper in the screen file is private
+ * there, and this dialog must not depend on it.
+ */
+private fun queryDisplayName(context: Context, uri: Uri): String {
+    var name: String? = null
+    try {
+        context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+            val index = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+            if (index >= 0 && cursor.moveToFirst()) {
+                name = cursor.getString(index)
+            }
+        }
+    } catch (_: Exception) {
+    }
+    return name ?: uri.lastPathSegment ?: ""
 }
