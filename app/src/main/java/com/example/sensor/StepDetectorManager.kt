@@ -121,6 +121,68 @@ class StepDetectorManager(
 
     private var currentHeadingDeg: Float = 0f
 
+    /**
+     * Angle between where the DEVICE points and where the USER actually travels.
+     *
+     * A phone carried in a pocket sits at some arbitrary rotation relative to the body, so its
+     * compass heading is not the walking direction — it is the walking direction plus a constant
+     * offset. Projecting steps on the raw device heading rotates the entire blind leg sideways,
+     * which is exactly the "path went off to the right" symptom.
+     *
+     * The offset is learned while GPS is available by comparing the GPS course over ground with
+     * the device heading at the same moment, then applied for the whole dead-reckoning leg.
+     */
+    @Volatile
+    var headingOffsetDeg: Float = 0f
+        private set
+
+    /** True once an offset has been measured against real GPS movement. */
+    @Volatile
+    var isHeadingOffsetCalibrated: Boolean = false
+        private set
+
+    /** Running circular average of recent offset samples. */
+    private var offsetSinSum = 0.0
+    private var offsetCosSum = 0.0
+    private var offsetSamples = 0
+
+    /**
+     * Feeds one calibration sample. Call only with a GPS course that means something:
+     * the user must actually be moving, otherwise "course over ground" is noise.
+     */
+    fun submitHeadingCalibration(gpsCourseDeg: Float, deviceHeadingDeg: Float) {
+        val diff = Math.toRadians((gpsCourseDeg - deviceHeadingDeg).toDouble())
+        // Average as vectors so the 0/360 wrap does not corrupt the mean.
+        offsetSinSum += kotlin.math.sin(diff)
+        offsetCosSum += kotlin.math.cos(diff)
+        offsetSamples++
+
+        // Keep the window short so a changed carry position is picked up quickly.
+        if (offsetSamples > HEADING_OFFSET_WINDOW) {
+            offsetSinSum *= 0.5
+            offsetCosSum *= 0.5
+            offsetSamples = HEADING_OFFSET_WINDOW / 2
+        }
+
+        val mean = Math.toDegrees(kotlin.math.atan2(offsetSinSum, offsetCosSum)).toFloat()
+        headingOffsetDeg = ((mean % 360f) + 360f) % 360f
+        isHeadingOffsetCalibrated = offsetSamples >= MIN_CALIBRATION_SAMPLES
+    }
+
+    fun resetHeadingCalibration() {
+        offsetSinSum = 0.0
+        offsetCosSum = 0.0
+        offsetSamples = 0
+        headingOffsetDeg = 0f
+        isHeadingOffsetCalibrated = false
+    }
+
+    /** Direction of travel: device heading corrected by the learned carry offset. */
+    private fun travelHeadingDeg(): Float {
+        val h = currentHeadingDeg + if (isHeadingOffsetCalibrated) headingOffsetDeg else 0f
+        return ((h % 360f) + 360f) % 360f
+    }
+
     var onStepDetected: ((point: GeoPoint?, headingDeg: Float) -> Unit)? = null
     var onStepFlushed: ((FlushedPdrPoint) -> Unit)? = null
 
@@ -261,7 +323,7 @@ class StepDetectorManager(
             return
         }
 
-        val rad = Math.toRadians(currentHeadingDeg.toDouble())
+        val rad = Math.toRadians(travelHeadingDeg().toDouble())
         val dx = stepLengthMeters * sin(rad)
         val dy = stepLengthMeters * cos(rad)
 
@@ -284,11 +346,11 @@ class StepDetectorManager(
             isHeadingStale = false
         )
 
-        onStepDetected?.invoke(estimatedPoint, currentHeadingDeg)
+        onStepDetected?.invoke(estimatedPoint, travelHeadingDeg())
 
         // Check adaptive criteria to flush accumulated steps
         val displacement = sqrt(accumulatedDx * accumulatedDx + accumulatedDy * accumulatedDy)
-        val headingDiff = angleDifferenceDeg(currentHeadingDeg, lastRecordedHeadingDeg)
+        val headingDiff = angleDifferenceDeg(travelHeadingDeg(), lastRecordedHeadingDeg)
         val timeSinceFlush = if (lastFlushTimestamp > 0L) timestamp - lastFlushTimestamp else 0L
 
         val reason = when {
@@ -328,7 +390,7 @@ class StepDetectorManager(
             currentAnchorPos
         }
 
-        val headingAtFlush = currentHeadingDeg
+        val headingAtFlush = travelHeadingDeg()
         val stepsCount = accumulatedSteps
 
         // Update anchor to the new flushed position and clear accumulation buffers
@@ -400,6 +462,12 @@ class StepDetectorManager(
 
     companion object {
         private const val TAG = "StepDetectorManager"
+
+        /** How many offset samples the running average keeps. */
+        const val HEADING_OFFSET_WINDOW = 40
+
+        /** Below this the offset is not trusted yet and raw device heading is used. */
+        const val MIN_CALIBRATION_SAMPLES = 5
 
         /** Heading older than this is treated as unusable for projecting steps. */
         const val MAX_HEADING_AGE_MS = 15_000L
