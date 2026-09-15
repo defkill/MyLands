@@ -71,20 +71,31 @@ object TrackFilter {
 
         for ((index, candidate) in points.withIndex()) {
             if (candidate.source == TrackPointEntity.SOURCE_DEAD_RECKONING) {
-                val prevPdr = kept.lastOrNull()
-                if (prevPdr == null) {
+                val previous = kept.lastOrNull()
+                if (previous == null) {
+                    kept.add(candidate)
+                    continue
+                }
+
+                // Only compare against another dead-reckoning point. The FIRST point of a blind
+                // leg is measured from a GPS fix that may itself have been off, and judging the
+                // leg by that distance threw away the entire (correctly shaped) walk. Keeping
+                // the leg and letting its own internal consistency speak is the better trade:
+                // a displaced path still shows where the user went relative to themselves.
+                if (previous.source != TrackPointEntity.SOURCE_DEAD_RECKONING) {
                     kept.add(candidate)
                     continue
                 }
 
                 val d = GeodesyEngine.distanceMeters(
-                    prevPdr.latitude, prevPdr.longitude,
+                    previous.latitude, previous.longitude,
                     candidate.latitude, candidate.longitude
                 )
-                val dtSec = (candidate.timestamp - prevPdr.timestamp) / 1000.0
+                val dtSec = (candidate.timestamp - previous.timestamp) / 1000.0
                 val pace = if (dtSec > 0.0) d / dtSec else Double.MAX_VALUE
 
-                // Reject legs that no walker could have produced between two flushes.
+                // Within a leg, neighbouring points are flushed every few metres, so a big gap
+                // means the heading or anchor broke mid-leg.
                 if (d > MAX_PDR_STEP_METERS || pace > MAX_WALKING_SPEED_MPS) {
                     rejected++
                     continue
