@@ -150,6 +150,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     private var lastGoodFix: GeoPoint? = null
 
+    /** Reference point for measuring stride length over a stretch walked with GPS. */
+    private var stepLengthRefFix: GeoPoint? = null
+    private var stepLengthRefSteps: Int = 0
+
     private val _blindDistanceMeters = MutableStateFlow(0.0)
     val blindDistanceMeters: StateFlow<Double> = _blindDistanceMeters.asStateFlow()
 
@@ -201,6 +205,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 deviceHeadingDeg = orientationManager.orientationData.value.trueHeadingDeg
                             )
                         }
+
+                        // Measure stride: over a stretch walked with GPS we know both the
+                        // distance and the step count, so the step length stops being a guess.
+                        val anchorFix = stepLengthRefFix
+                        val anchorSteps = stepLengthRefSteps
+                        val stepsNow = pdrState.value.totalSteps
+                        if (anchorFix == null) {
+                            stepLengthRefFix = loc
+                            stepLengthRefSteps = stepsNow
+                        } else {
+                            val walked = GeodesyEngine.distanceMeters(
+                                anchorFix.latitude, anchorFix.longitude, loc.latitude, loc.longitude
+                            )
+                            val stepsTaken = stepsNow - anchorSteps
+                            if (walked >= STEP_CALIBRATION_DISTANCE_M) {
+                                stepDetectorManager.submitStepLengthCalibration(walked, stepsTaken)
+                                stepLengthRefFix = loc
+                                stepLengthRefSteps = stepsNow
+                            }
+                        }
                     }
                     if (_isFollowingLocation.value) {
                         _mapCenter.value = loc
@@ -250,6 +274,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         stepDetectorManager.updateGpsAnchor(anchor)
                         stepDetectorManager.setDeadReckoningActive(true)
                     }
+                    // The stride reference is only meaningful while fixes keep arriving.
+                    stepLengthRefFix = null
                 } else {
                     _blindDistanceMeters.value = 0.0
                 }
@@ -379,6 +405,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
          * so it must not be used to calibrate the carry offset.
          */
         const val MIN_CALIBRATION_SPEED_MPS = 0.8f
+
+        /** Stride is measured over stretches of at least this length. */
+        const val STEP_CALIBRATION_DISTANCE_M = 40.0
 
         /** Fixes worse than this carry no usable information and are dropped on the spot. */
         const val UNUSABLE_ACCURACY_METERS = 100.0f
