@@ -50,7 +50,7 @@ class TileManager(private val context: Context) {
      * situation this app exists for. filesDir is only removed when the user uninstalls or
      * clears app data.
      */
-    private val baseCacheDir = File(context.filesDir, "map_tiles")
+    val baseCacheDir = File(context.filesDir, "map_tiles")
 
     /** Previous location; kept only to move existing tiles over once. */
     private val legacyCacheDir = File(context.cacheDir, "map_tiles")
