@@ -194,7 +194,7 @@ fun RegionDownloadProgressDialog(
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = "Можно свернуть приложение — загрузка продолжится, пока оно работает.",
+                    text = "Можно свернуть приложение и выключить экран — загрузка идёт в фоне.",
                     color = Color(0xFF607D8B),
                     fontSize = 10.sp
                 )
