@@ -116,7 +116,9 @@ object RegionDownloader {
         val skipped: Int,
         val failed: Int,
         val abortedByProvider: Boolean,
-        val cancelled: Boolean
+        val cancelled: Boolean,
+        /** Layers that stopped responding and were skipped; others still completed. */
+        val blockedSources: List<String> = emptyList()
     )
 
     /**
@@ -137,9 +139,13 @@ object RegionDownloader {
         var downloaded = 0
         var skipped = 0
         var failed = 0
-        var consecutiveFailures = 0
-        var abortedByProvider = false
         var processed = 0
+
+        // Failures are counted PER SOURCE. Aborting the whole job on the first provider's
+        // refusals meant a blocked OSM killed the run before the satellite layer was ever
+        // tried — the user saw "0 downloaded" while that layer worked fine by hand.
+        val consecutiveFailures = HashMap<String, Int>()
+        val blockedSources = LinkedHashSet<String>()
 
         val plan = ArrayList<Pair<TileSource, TileCoordinate>>()
         for (source in sources) {
@@ -155,10 +161,17 @@ object RegionDownloader {
 
         for ((source, tile) in plan) {
             if (isCancelled()) {
-                return@withContext Result(downloaded, skipped, failed, abortedByProvider, true)
+                return@withContext Result(
+                    downloaded, skipped, failed, false, true, blockedSources.toList()
+                )
             }
 
             processed++
+
+            // Skip everything from a source that has already given up on us.
+            if (blockedSources.contains(source.id)) {
+                continue
+            }
 
             val target = File(baseDir, "${source.id}/${tile.zoom}/${tile.x}/${tile.y}.png")
             if (target.exists()) {
@@ -172,16 +185,14 @@ object RegionDownloader {
             val ok = fetchTile(source, tile, target)
             if (ok) {
                 downloaded++
-                consecutiveFailures = 0
+                consecutiveFailures[source.id] = 0
             } else {
                 failed++
-                consecutiveFailures++
-                if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-                    // Treat a run of failures as the provider refusing us and stop, rather than
-                    // hammering it until the address is banned outright.
-                    Log.w(TAG, "Aborting: $consecutiveFailures consecutive failures")
-                    abortedByProvider = true
-                    break
+                val streak = (consecutiveFailures[source.id] ?: 0) + 1
+                consecutiveFailures[source.id] = streak
+                if (streak >= MAX_CONSECUTIVE_FAILURES) {
+                    Log.w(TAG, "Source ${source.id} blocked after $streak failures; skipping it")
+                    blockedSources.add(source.id)
                 }
             }
 
@@ -193,7 +204,15 @@ object RegionDownloader {
             }
         }
 
-        Result(downloaded, skipped, failed, abortedByProvider, false)
+        val sourceNames = sources.filter { blockedSources.contains(it.id) }.map { it.name }
+                Result(
+            downloaded = downloaded,
+            skipped = skipped,
+            failed = failed,
+            abortedByProvider = blockedSources.size == sources.size && downloaded == 0,
+            cancelled = false,
+            blockedSources = sourceNames
+        )
     }
 
     private fun fetchTile(source: TileSource, tile: TileCoordinate, target: File): Boolean {
@@ -208,8 +227,17 @@ object RegionDownloader {
 
             // Providers may answer 200 with a "blocked" placeholder image; treat it as a failure
             // so the consecutive-failure guard can stop the job.
-            if (!connection.getHeaderField("x-blocked").isNullOrBlank()) return false
-            if (connection.responseCode != HttpURLConnection.HTTP_OK) return false
+            val blocked = connection.getHeaderField("x-blocked")
+            if (!blocked.isNullOrBlank()) {
+                Log.w(TAG, "${source.id} ${tile.key}: blocked by provider ($blocked)")
+                return false
+            }
+
+            val code = connection.responseCode
+            if (code != HttpURLConnection.HTTP_OK) {
+                Log.w(TAG, "${source.id} ${tile.key}: HTTP $code")
+                return false
+            }
 
             val bytes = connection.inputStream.use { it.readBytes() }
             if (bytes.size < 1024) return false
