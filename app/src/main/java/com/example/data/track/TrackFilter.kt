@@ -25,6 +25,20 @@ object TrackFilter {
     const val MIN_MOVEMENT_METERS = 8.0
 
     /**
+     * Upper bound on the gap between two consecutive dead-reckoning points.
+     *
+     * PDR flushes every ~18 m, on a 25° turn, or after 60 s, so neighbouring PDR points are
+     * always close together. A far larger gap is not a walk — it means the heading was stale or
+     * the anchor was wrong, and the leg was projected as one long straight line. Such segments
+     * were previously passed through untouched because "dead reckoning never jumps"; it does
+     * when its inputs are broken.
+     */
+    const val MAX_PDR_STEP_METERS = 60.0
+
+    /** Walking speed ceiling used to sanity-check dead-reckoning legs. */
+    const val MAX_WALKING_SPEED_MPS = 3.0
+
+    /**
      * How many later fixes must agree with a suspicious jump before it is accepted.
      *
      * This is the "quarantine": a single wild fix that snaps back is discarded, but a genuine
@@ -56,8 +70,26 @@ object TrackFilter {
         var rejected = 0
 
         for ((index, candidate) in points.withIndex()) {
-            // Dead reckoning never jumps: always keep it.
             if (candidate.source == TrackPointEntity.SOURCE_DEAD_RECKONING) {
+                val prevPdr = kept.lastOrNull()
+                if (prevPdr == null) {
+                    kept.add(candidate)
+                    continue
+                }
+
+                val d = GeodesyEngine.distanceMeters(
+                    prevPdr.latitude, prevPdr.longitude,
+                    candidate.latitude, candidate.longitude
+                )
+                val dtSec = (candidate.timestamp - prevPdr.timestamp) / 1000.0
+                val pace = if (dtSec > 0.0) d / dtSec else Double.MAX_VALUE
+
+                // Reject legs that no walker could have produced between two flushes.
+                if (d > MAX_PDR_STEP_METERS || pace > MAX_WALKING_SPEED_MPS) {
+                    rejected++
+                    continue
+                }
+
                 kept.add(candidate)
                 continue
             }
