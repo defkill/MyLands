@@ -23,9 +23,28 @@ data class OrientationData(
 class OrientationManager(private val context: Context) : SensorEventListener {
 
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
-    private val rotationVectorSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
+    /**
+     * Prefer the wake-up rotation vector so heading keeps updating with the screen off.
+     *
+     * With the non-wake-up sensor the last heading before the CPU suspended is reused for every
+     * subsequent step, which projects the whole dead-reckoning leg as one straight line in a
+     * single direction no matter where the user actually walked.
+     */
+    private val rotationVectorSensor =
+        sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR, true)
+            ?: sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
     private val accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
     private val magnetometer = sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
+
+    /** Timestamp of the last orientation update, to detect a frozen heading. */
+    @Volatile
+    var lastUpdateTimestamp: Long = 0L
+        private set
+
+    /** Milliseconds since heading last changed; large values mean the sensor stopped reporting. */
+    fun headingAgeMillis(): Long =
+        if (lastUpdateTimestamp == 0L) Long.MAX_VALUE
+        else System.currentTimeMillis() - lastUpdateTimestamp
 
     private val _orientationData = MutableStateFlow(OrientationData())
     val orientationData: StateFlow<OrientationData> = _orientationData.asStateFlow()
@@ -125,6 +144,7 @@ class OrientationManager(private val context: Context) : SensorEventListener {
 
         val trueHeadingDeg = (smoothedHeadingDeg + currentDeclinationDeg + 360f) % 360f
 
+        lastUpdateTimestamp = System.currentTimeMillis()
         _orientationData.value = OrientationData(
             magneticHeadingDeg = smoothedHeadingDeg,
             trueHeadingDeg = trueHeadingDeg,
