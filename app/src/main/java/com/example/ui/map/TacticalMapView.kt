@@ -116,7 +116,12 @@ fun TacticalMapView(
         modifier = modifier
             .fillMaxSize()
             .testTag("tactical_map_canvas")
-            .pointerInput(Unit) {
+            .pointerInput(isSelectingRegion) {
+                // While selecting a region the tap handler must stand down: it runs first in the
+                // modifier chain and was consuming the touch to drop a candidate waypoint, so the
+                // drag never reached the selection handler below.
+                if (isSelectingRegion) return@pointerInput
+
                 detectTapGestures { offset ->
                     val tappedGeo = MapProjection.screenToGeo(
                         screenX = offset.x,
@@ -188,7 +193,10 @@ fun TacticalMapView(
                     }
                 )
             }
-            .pointerInput(Unit) {
+            .pointerInput(isSelectingRegion) {
+                // Panning would fight the selection drag for the same gesture.
+                if (isSelectingRegion) return@pointerInput
+
                 detectTransformGestures { _, pan, gestureZoom, _ ->
                     if (gestureZoom != 1.0f) {
                         val newZoom = (currentZoom + ln(gestureZoom.toDouble()) / ln(1.5))
