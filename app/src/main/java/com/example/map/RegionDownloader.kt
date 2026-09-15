@@ -213,7 +213,13 @@ object RegionDownloader {
 
             val bytes = connection.inputStream.use { it.readBytes() }
             if (bytes.size < 1024) return false
-            if (BitmapFactory.decodeByteArray(bytes, 0, bytes.size) == null) return false
+
+            // Validate the image WITHOUT allocating it. Fully decoding every tile meant a fresh
+            // 256x256 bitmap (~256 KB) per request thousands of times over, which pushed the app
+            // into out-of-memory territory during long region downloads.
+            val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+            if (opts.outWidth <= 0 || opts.outHeight <= 0) return false
 
             target.parentFile?.mkdirs()
             target.writeBytes(bytes)
