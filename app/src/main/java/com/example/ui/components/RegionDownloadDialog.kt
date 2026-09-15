@@ -164,10 +164,14 @@ fun RegionDownloadDialog(
 @Composable
 fun RegionDownloadProgressDialog(
     progress: DownloadProgress,
+    onMinimize: () -> Unit,
+    onOpenFiles: () -> Unit,
     onCancel: () -> Unit
 ) {
     AlertDialog(
-        onDismissRequest = { },
+        // Tapping outside collapses instead of doing nothing: a download can run for hours and
+        // must not hold the map hostage.
+        onDismissRequest = onMinimize,
         containerColor = Color(0xFF161E28),
         title = { Text("Загрузка карты", color = Color.White, fontSize = 15.sp) },
         text = {
