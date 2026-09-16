@@ -235,7 +235,8 @@ fun NavigationMainScreen(
                 waypoints = waypoints,
                 selectedWaypoint = selectedWaypoint,
                 onWaypointSelected = { wp ->
-                    if (isPickingLosTarget) {
+                    // The callback is nullable: a tap on empty space clears the selection.
+                    if (isPickingLosTarget && wp != null) {
                         // While sighting, tapping a waypoint chooses target B instead of
                         // opening its editor.
                         viewModel.pickLosTarget(wp.toGeoPoint())
