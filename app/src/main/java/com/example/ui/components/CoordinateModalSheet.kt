@@ -40,6 +40,10 @@ fun CoordinateModalSheet(
     selectedSystem: CoordinateSystem,
     onSystemSelected: (CoordinateSystem) -> Unit,
     onJumpToPoint: (GeoPoint) -> Unit,
+    /** Shows the current point as a QR code for hand-off with every radio off. */
+    onShowQr: () -> Unit,
+    /** Opens the scanner to receive a point from another device's screen. */
+    onScanQr: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -80,12 +84,39 @@ fun CoordinateModalSheet(
                 Text(
                     text = "КООРДИНАТНАЯ КАРТОЧКА",
                     color = Color.White,
-                    fontSize = 18.sp,
+                    fontSize = 17.sp,
                     fontWeight = FontWeight.Bold,
-                    letterSpacing = 1.sp
+                    letterSpacing = 1.sp,
+                    // Lets the title shrink rather than push the actions off the row.
+                    modifier = Modifier.weight(1f, fill = false)
                 )
-                IconButton(onClick = onDismiss) {
-                    Icon(Icons.Default.Close, contentDescription = "Закрыть", tint = Color.Gray)
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(
+                        onClick = onShowQr,
+                        modifier = Modifier.testTag("show_point_qr_button")
+                    ) {
+                        Icon(
+                            Icons.Default.QrCode,
+                            contentDescription = "Показать QR-код",
+                            tint = Color(0xFF81C784)
+                        )
+                    }
+
+                    IconButton(
+                        onClick = onScanQr,
+                        modifier = Modifier.testTag("scan_point_qr_button")
+                    ) {
+                        Icon(
+                            Icons.Default.QrCodeScanner,
+                            contentDescription = "Сканировать QR-код",
+                            tint = Color(0xFF00E5FF)
+                        )
+                    }
+
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Close, contentDescription = "Закрыть", tint = Color.Gray)
+                    }
                 }
             }
 
