@@ -716,7 +716,18 @@ fun NavigationMainScreen(
                     LaunchedEffect(targetPt) {
                         viewModel.elevationForPoint(targetPt) { pointElevation = it }
                     }
-                    val elevationSuffix = pointElevation?.let { " • H: ${it.toInt()} м" } ?: ""
+                    // Height in priority order: SRTM terrain, then the height stored with the
+                    // waypoint when it was created, then whatever the point itself carries.
+                    // The label never disappears — "H: ---" says the data is missing rather
+                    // than silently dropping the field.
+                    val resolvedAltitude = pointElevation
+                        ?: selectedWaypoint?.altitudeMeters
+                        ?: targetPt.altitude
+                    val elevationSuffix = if (resolvedAltitude != null) {
+                        " • H: ${resolvedAltitude.toInt()} м"
+                    } else {
+                        " • H: ---"
+                    }
 
                     val title = if (candidatePoint != null) {
                         "ТОЧКА-КАНДИДАТ$elevationSuffix"
@@ -1261,7 +1272,8 @@ fun NavigationMainScreen(
                         name = name,
                         latitude = targetPoint.latitude,
                         longitude = targetPoint.longitude,
-                        altitude = targetPoint.altitude,
+                        // Keep a real height with the point: terrain first, GPS second.
+                        altitude = targetPoint.altitude ?: terrainElevation,
                         description = desc,
                         colorArgb = color
                     )
