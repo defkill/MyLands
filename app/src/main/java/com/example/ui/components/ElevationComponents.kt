@@ -451,3 +451,132 @@ fun RouteProfileChart(profile: RouteProfile, modifier: Modifier = Modifier) {
         drawContext.canvas.nativeCanvas.drawText("${profile.minElevation.toInt()} м", 6f, h - 6f, paint)
     }
 }
+
+/**
+ * On-map overlay for the visibility check: prompts for the target while one is being chosen,
+ * then reports the verdict and the blocking summit.
+ *
+ * Kept as an overlay rather than a dialog so the map — and the ray drawn on it — stays visible
+ * while the user reads the result.
+ */
+@Composable
+fun VisibilityCheckOverlay(
+    result: LineOfSightResult?,
+    isPickingTarget: Boolean,
+    isCalculating: Boolean,
+    onCreateObstacleWaypoint: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth().testTag("visibility_overlay"),
+        color = Color(0xEE10151C),
+        shape = RoundedCornerShape(12.dp),
+        tonalElevation = 8.dp
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "ПРЯМАЯ ВИДИМОСТЬ",
+                    color = Color(0xFF80DEEA),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = onOpenSettings) {
+                        Text("Параметры", color = Color(0xFF90CAF9), fontSize = 12.sp)
+                    }
+                    IconButton(onClick = onClose, modifier = Modifier.size(28.dp)) {
+                        Icon(Icons.Default.Close, contentDescription = "Закрыть", tint = Color.Gray)
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            when {
+                isPickingTarget -> Text(
+                    "Выберите цель: нажмите точку на карте или сохранённую точку",
+                    color = Color(0xFFFFB74D),
+                    fontSize = 13.sp
+                )
+
+                isCalculating -> Text("Расчёт по рельефу…", color = Color(0xFFB0BEC5), fontSize = 13.sp)
+
+                result == null -> Text(
+                    "Нет данных рельефа. Импортируйте .hgt через меню «Файлы».",
+                    color = Color(0xFFEF9A9A),
+                    fontSize = 13.sp
+                )
+
+                else -> {
+                    Text(
+                        text = if (result.isVisible) "✓ ПРЯМАЯ ВИДИМОСТЬ ОТКРЫТА"
+                        else "✕ ГОРИЗОНТ ЗАКРЫТ ПРЕПЯТСТВИЕМ",
+                        color = if (result.isVisible) Color(0xFF69F0AE) else Color(0xFFEF5350),
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = String.format(
+                            Locale.US,
+                            "Дистанция %.2f км",
+                            result.totalDistanceMeters / 1000.0
+                        ),
+                        color = Color(0xFFB0BEC5),
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+
+                    result.worstObstacle?.let { o ->
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = String.format(
+                                Locale.US,
+                                "Препятствие на удалении %.2f км • Высота пика: %.0f м (выше луча на %.0f м)",
+                                o.distanceMeters / 1000.0,
+                                o.terrainMeters,
+                                o.obstructionMeters
+                            ),
+                            color = Color(0xFFFFB74D),
+                            fontSize = 12.sp
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = String.format(
+                                Locale.US,
+                                "Подняться на %.0f м, чтобы открылось",
+                                result.requiredExtraHeightMeters
+                            ),
+                            color = Color(0xFF81C784),
+                            fontSize = 12.sp
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Button(
+                            onClick = onCreateObstacleWaypoint,
+                            modifier = Modifier.fillMaxWidth().testTag("create_obstacle_waypoint_button"),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE64A19))
+                        ) {
+                            Text("ПОСТАВИТЬ ТОЧКУ НА ПРЕПЯТСТВИИ", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+                    LineOfSightChart(
+                        result = result,
+                        modifier = Modifier.fillMaxWidth().height(110.dp)
+                    )
+                }
+            }
+        }
+    }
+}
