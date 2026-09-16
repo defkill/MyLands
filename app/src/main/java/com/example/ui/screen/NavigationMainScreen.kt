@@ -79,6 +79,8 @@ fun NavigationMainScreen(
     val isCalculatingLos by viewModel.isCalculatingLos.collectAsStateWithLifecycle()
     val isPickingLosTarget by viewModel.isPickingLosTarget.collectAsStateWithLifecycle()
     val losObserver by viewModel.losObserver.collectAsStateWithLifecycle()
+    val losTarget by viewModel.losTarget.collectAsStateWithLifecycle()
+    val isLosActive by viewModel.isLosActive.collectAsStateWithLifecycle()
     val observerHeight by viewModel.observerHeight.collectAsStateWithLifecycle()
     val targetHeight by viewModel.targetHeight.collectAsStateWithLifecycle()
     val sightMode by viewModel.sightMode.collectAsStateWithLifecycle()
@@ -258,6 +260,8 @@ fun NavigationMainScreen(
                 triangulationState = triangulationState,
                 savedTrackPoints = savedTrackPoints,
                 losResult = losResult,
+                losObserver = losObserver,
+                losTarget = losTarget,
                 isSelectingRegion = isSelectingRegion,
                 regionSelection = regionSelection,
                 onRegionSelected = { viewModel.setRegionSelection(it) },
@@ -758,15 +762,20 @@ fun NavigationMainScreen(
                 }
 
                 // Visibility check overlay: stays on the map so the ray remains visible.
-                if (isPickingLosTarget || losResult != null) {
+                // Driven by an explicit "tool is open" flag. Keying it off the result meant the
+                // panel disappeared the moment a target was picked, since the result is still
+                // null while the analysis runs or when no terrain tile covers the area.
+                if (isLosActive) {
                     VisibilityCheckOverlay(
                         result = losResult,
                         isPickingTarget = isPickingLosTarget,
                         isCalculating = isCalculatingLos,
+                        hasTarget = losTarget != null,
                         onCreateObstacleWaypoint = {
                             viewModel.createObstacleWaypoint()
                             Toast.makeText(context, "Точка на препятствии создана", Toast.LENGTH_SHORT).show()
                         },
+                        onImportElevation = { showDataExchangeDialog = true },
                         onOpenSettings = { showLosDialog = true },
                         onClose = { viewModel.cancelVisibilityCheck() },
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
