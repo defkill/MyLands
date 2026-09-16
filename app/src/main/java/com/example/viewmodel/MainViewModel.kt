@@ -543,15 +543,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _isPickingLosTarget = MutableStateFlow(false)
     val isPickingLosTarget: StateFlow<Boolean> = _isPickingLosTarget.asStateFlow()
 
+    /**
+     * Whether the sighting tool is open at all.
+     *
+     * Kept separate from "has a result": deriving visibility from `losResult != null` meant the
+     * panel vanished the instant the user picked a target, because picking clears the
+     * target-selection flag while the result is still null (analysis running, or no .hgt tile
+     * for the area). The tool looked like it crashed, and the "import terrain" message inside
+     * it could never be seen.
+     */
+    private val _isLosActive = MutableStateFlow(false)
+    val isLosActive: StateFlow<Boolean> = _isLosActive.asStateFlow()
+
     /** Starts a check FROM [observer]; the target is chosen next. */
     fun beginVisibilityCheck(observer: GeoPoint) {
         _losObserver.value = observer
         _losTarget.value = null
         _losResult.value = null
         _isPickingLosTarget.value = true
+        _isLosActive.value = true
     }
 
-    /** Supplies point B and runs the analysis. */
+    /** Supplies point B and runs the analysis. The tool stays open regardless of the outcome. */
     fun pickLosTarget(target: GeoPoint) {
         if (_losObserver.value == null) return
         _losTarget.value = target
@@ -561,6 +574,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun cancelVisibilityCheck() {
         _isPickingLosTarget.value = false
+        _isLosActive.value = false
         clearLineOfSight()
     }
 
