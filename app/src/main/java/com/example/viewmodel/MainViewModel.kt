@@ -45,7 +45,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
-@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, kotlinx.coroutines.FlowPreview::class)
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val database = AppDatabase.getInstance(application)
@@ -166,6 +166,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _isPositionEstimated = MutableStateFlow(false)
     val isPositionEstimated: StateFlow<Boolean> = _isPositionEstimated.asStateFlow()
 
+    // Elevation state is declared BEFORE init(): Kotlin initialises properties in order and the
+    // watcher started in init reads these. Declaring them further down left them null at that
+    // moment, which is exactly what crashed the app on launch once before.
+    val elevationEngine = ElevationEngine(application)
+
+    private val _hasElevationData = MutableStateFlow(elevationEngine.hasAnyTiles())
+    val hasElevationData: StateFlow<Boolean> = _hasElevationData.asStateFlow()
+
+    /** Terrain height under the map centre, refreshed as the map moves. */
+    private val _terrainElevation = MutableStateFlow<Double?>(null)
+    val terrainElevation: StateFlow<Double?> = _terrainElevation.asStateFlow()
+
     private val _showRawTracks = MutableStateFlow(false)
     val showRawTracks: StateFlow<Boolean> = _showRawTracks.asStateFlow()
 
@@ -174,6 +186,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         locationTracker.startListening()
         stepDetectorManager.start()
         stepDetectorManager.headingAgeProvider = { orientationManager.headingAgeMillis() }
+        startCenterElevationWatcher()
 
         // Sync location with map center if following
         viewModelScope.launch {
@@ -414,6 +427,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         /** Stride is measured over stretches of at least this length. */
         const val STEP_CALIBRATION_DISTANCE_M = 40.0
 
+        /** Pause after the map stops moving before the terrain height is read from disk. */
+        const val CENTER_ELEVATION_DEBOUNCE_MS = 120L
+
         /** Fixes worse than this carry no usable information and are dropped on the spot. */
         const val UNUSABLE_ACCURACY_METERS = 100.0f
     }
@@ -429,7 +445,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setMapCenter(point: GeoPoint) {
         _mapCenter.value = point
         _isFollowingLocation.value = false
-        updateTerrainElevation(point)
     }
 
     fun setMapZoom(zoom: Double) {
@@ -493,15 +508,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // --- Elevation (SRTM/HGT), line of sight, route profile ---
 
-    val elevationEngine = ElevationEngine(application)
-
-    private val _hasElevationData = MutableStateFlow(elevationEngine.hasAnyTiles())
-    val hasElevationData: StateFlow<Boolean> = _hasElevationData.asStateFlow()
-
-    /** Terrain height under the map centre, refreshed as the map moves. */
-    private val _terrainElevation = MutableStateFlow<Double?>(null)
-    val terrainElevation: StateFlow<Double?> = _terrainElevation.asStateFlow()
-
     private val _losResult = MutableStateFlow<LineOfSightResult?>(null)
     val losResult: StateFlow<LineOfSightResult?> = _losResult.asStateFlow()
 
@@ -514,10 +520,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _isCalculatingProfile = MutableStateFlow(false)
     val isCalculatingProfile: StateFlow<Boolean> = _isCalculatingProfile.asStateFlow()
 
-    private val _observerHeight = MutableStateFlow(LineOfSight.DEFAULT_OBSERVER_HEIGHT)
+    private val _observerHeight = MutableStateFlow(1.8)
     val observerHeight: StateFlow<Double> = _observerHeight.asStateFlow()
 
-    private val _targetHeight = MutableStateFlow(LineOfSight.DEFAULT_TARGET_HEIGHT)
+    private val _targetHeight = MutableStateFlow(0.5)
     val targetHeight: StateFlow<Double> = _targetHeight.asStateFlow()
 
     private val _sightMode = MutableStateFlow(SightMode.VISUAL)
@@ -529,6 +535,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _losTarget = MutableStateFlow<GeoPoint?>(null)
     val losTarget: StateFlow<GeoPoint?> = _losTarget.asStateFlow()
+
+    /**
+     * True while the user is choosing the target of a visibility check: the next map or list
+     * tap picks point B instead of doing its usual thing.
+     */
+    private val _isPickingLosTarget = MutableStateFlow(false)
+    val isPickingLosTarget: StateFlow<Boolean> = _isPickingLosTarget.asStateFlow()
+
+    /** Starts a check FROM [observer]; the target is chosen next. */
+    fun beginVisibilityCheck(observer: GeoPoint) {
+        _losObserver.value = observer
+        _losTarget.value = null
+        _losResult.value = null
+        _isPickingLosTarget.value = true
+    }
+
+    /** Supplies point B and runs the analysis. */
+    fun pickLosTarget(target: GeoPoint) {
+        if (_losObserver.value == null) return
+        _losTarget.value = target
+        _isPickingLosTarget.value = false
+        calculateLineOfSight()
+    }
+
+    fun cancelVisibilityCheck() {
+        _isPickingLosTarget.value = false
+        clearLineOfSight()
+    }
 
     fun setObserverHeight(v: Double) { _observerHeight.value = v }
     fun setTargetHeight(v: Double) { _targetHeight.value = v }
@@ -549,13 +583,40 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
-    private fun updateTerrainElevation(point: GeoPoint) {
+    /**
+     * Terrain height under the map centre, recomputed as the map moves.
+     *
+     * Panning emits a new centre on every frame, so reading the HGT tile on each one would hit
+     * the disk dozens of times a second and stutter the gesture. The centre flow is debounced
+     * instead: the read happens once the finger settles.
+     */
+    private fun startCenterElevationWatcher() {
+        viewModelScope.launch {
+            mapCenter
+                .debounce(CENTER_ELEVATION_DEBOUNCE_MS)
+                .collectLatest { point ->
+                    if (!_hasElevationData.value) {
+                        _terrainElevation.value = null
+                        return@collectLatest
+                    }
+                    _terrainElevation.value = withContext(Dispatchers.IO) {
+                        elevationEngine.getElevation(point.latitude, point.longitude)
+                    }
+                }
+        }
+    }
+
+    /** Elevation for an arbitrary point, used for the candidate marker card. */
+    fun elevationForPoint(point: GeoPoint, onResult: (Double?) -> Unit) {
         if (!_hasElevationData.value) {
-            _terrainElevation.value = null
+            onResult(null)
             return
         }
-        viewModelScope.launch(Dispatchers.IO) {
-            _terrainElevation.value = elevationEngine.getElevation(point.latitude, point.longitude)
+        viewModelScope.launch {
+            val h = withContext(Dispatchers.IO) {
+                elevationEngine.getElevation(point.latitude, point.longitude)
+            }
+            onResult(h)
         }
     }
 
@@ -596,8 +657,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Saves the blocking summit as a waypoint — useful for siting a relay or an OP. */
     fun createObstacleWaypoint() {
         val obstacle = _losResult.value?.worstObstacle ?: return
+        setMapCenter(obstacle.point)
         addWaypointAt(
-            name = "Препятствие ${obstacle.terrainMeters.toInt()} м",
+            name = "Препятствие (H=${obstacle.terrainMeters.toInt()}м)",
             latitude = obstacle.point.latitude,
             longitude = obstacle.point.longitude,
             altitude = obstacle.terrainMeters,
