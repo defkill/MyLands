@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -295,6 +296,13 @@ fun EditWaypointDialog(
                     onClick = onCheckVisibility,
                     modifier = Modifier.fillMaxWidth().testTag("edit_waypoint_los_button")
                 ) {
+                    Icon(
+                        Icons.Default.Visibility,
+                        contentDescription = null,
+                        tint = Color(0xFF80DEEA),
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
                     Text("Проверить видимость отсюда", color = Color(0xFF80DEEA))
                 }
                 Spacer(modifier = Modifier.height(4.dp))
