@@ -95,15 +95,30 @@ fun CoordinateBottomBar(
                 }
 
                 // Elevation & Crosshair Indicator
+                //
+                // One height field fed by two sources, in priority order:
+                //   1. SRTM terrain height — defined for any point on the map (green);
+                //   2. GPS altitude — only exists where the user physically is (blue).
+                // Showing the GPS value alone made the height vanish the instant the map was
+                // panned off the user's position. When neither is available the field stays
+                // visible as "H: ---" so it is obvious that no .hgt tile is loaded for this
+                // square, rather than looking like the feature is broken.
                 Column(horizontalAlignment = Alignment.End) {
-                    val alt = crosshairPoint.altitude
-                    if (alt != null) {
+                    val displayElevation = terrainElevation ?: crosshairPoint.altitude
+                    if (displayElevation != null) {
                         Text(
-                            text = String.format(Locale.US, "H: %.0f м", alt),
-                            color = Color(0xFF90CAF9),
+                            text = String.format(Locale.US, "H: %.0f м", displayElevation),
+                            color = if (terrainElevation != null) Color(0xFF81C784) else Color(0xFF90CAF9),
                             fontSize = 13.sp,
                             fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Medium
+                            fontWeight = FontWeight.Bold
+                        )
+                    } else {
+                        Text(
+                            text = "H: ---",
+                            color = Color(0xFF546E7A),
+                            fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace
                         )
                     }
                     Text(
@@ -133,17 +148,6 @@ fun CoordinateBottomBar(
                     fontFamily = FontFamily.Monospace
                 )
 
-                // Terrain height from SRTM, which is the ground itself rather than the GPS
-                // ellipsoid figure — the number that matters for reading the landscape.
-                terrainElevation?.let { h ->
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Text(
-                        text = "H: ${h.toInt()} м",
-                        color = Color(0xFF81C784),
-                        fontSize = 12.sp,
-                        fontFamily = FontFamily.Monospace
-                    )
-                }
 
                 // GPS / PDR Telemetry
                 val gpsColor = when (gpsStatus) {
