@@ -464,7 +464,10 @@ fun VisibilityCheckOverlay(
     result: LineOfSightResult?,
     isPickingTarget: Boolean,
     isCalculating: Boolean,
+    /** True once a target has been chosen, so a null result means missing data, not "not started". */
+    hasTarget: Boolean,
     onCreateObstacleWaypoint: () -> Unit,
+    onImportElevation: () -> Unit,
     onOpenSettings: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier
@@ -509,9 +512,42 @@ fun VisibilityCheckOverlay(
 
                 isCalculating -> Text("Расчёт по рельефу…", color = Color(0xFFB0BEC5), fontSize = 13.sp)
 
+                // Target chosen but nothing came back: the area has no elevation tile. Say so
+                // plainly and offer the fix, instead of leaving the user with an empty panel.
+                result == null && hasTarget -> Column {
+                    Text(
+                        "НЕТ ФАЙЛОВ РЕЛЬЕФА (.HGT)",
+                        color = Color(0xFFEF5350),
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        "Для расчёта линии видимости импортируйте файл высот для этой зоны " +
+                            "(например, N50E036.hgt) через меню «Файлы».",
+                        color = Color(0xFFB0BEC5),
+                        fontSize = 12.sp
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(
+                        onClick = onImportElevation,
+                        modifier = Modifier.fillMaxWidth().testTag("import_elevation_from_los_button"),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00897B))
+                    ) {
+                        Text("Импортировать рельеф", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        "Линия визирования на карте показана жёлтым — азимут и дистанцию " +
+                            "видно и без данных рельефа.",
+                        color = Color(0xFF78909C),
+                        fontSize = 10.sp
+                    )
+                }
+
                 result == null -> Text(
-                    "Нет данных рельефа. Импортируйте .hgt через меню «Файлы».",
-                    color = Color(0xFFEF9A9A),
+                    "Выберите цель, чтобы рассчитать видимость.",
+                    color = Color(0xFFB0BEC5),
                     fontSize = 13.sp
                 )
 
