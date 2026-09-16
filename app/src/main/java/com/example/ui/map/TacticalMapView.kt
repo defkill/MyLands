@@ -468,6 +468,11 @@ private fun DrawScope.drawLineOfSight(
     val samples = result.samples
     if (samples.size < 2) return
 
+    // Colour by position relative to the blocking summit, not per-segment: everything up to the
+    // obstacle is genuinely visible, everything past it is dead ground. Segment-by-segment
+    // colouring produced a striped line that told the user nothing useful.
+    val cutoff = result.worstObstacle?.distanceMeters
+
     for (i in 0 until samples.size - 1) {
         val a = samples[i]
         val b = samples[i + 1]
@@ -477,20 +482,55 @@ private fun DrawScope.drawLineOfSight(
         val (bx, by) = MapProjection.geoToScreen(
             b.point, center.latitude, center.longitude, zoom, width, height
         )
+        val beyondObstacle = cutoff != null && a.distanceMeters >= cutoff
         drawLine(
-            color = if (a.isBlocked || b.isBlocked) Color(0xFFE53935) else Color(0xFF66BB6A),
+            color = if (beyondObstacle) Color(0xFFE53935) else Color(0xFF66BB6A),
             start = Offset(ax, ay),
             end = Offset(bx, by),
             strokeWidth = 6f
         )
     }
 
-    // Mark the summit that closes the view
+    // Endpoints
+    val first = samples.first()
+    val last = samples.last()
+    listOf(first, last).forEach { p ->
+        val (px, py) = MapProjection.geoToScreen(
+            p.point, center.latitude, center.longitude, zoom, width, height
+        )
+        drawCircle(Color.White, radius = 7f, center = Offset(px, py))
+    }
+
+    // Obstacle marker: a triangle with its height, right on the ray where it is blocked.
     result.worstObstacle?.let { o ->
         val (ox, oy) = MapProjection.geoToScreen(
             o.point, center.latitude, center.longitude, zoom, width, height
         )
-        drawCircle(Color(0xFFFFB74D), radius = 12f, center = Offset(ox, oy), style = Stroke(4f))
+
+        val size = 20f
+        val path = Path().apply {
+            moveTo(ox, oy - size)
+            lineTo(ox - size * 0.9f, oy + size * 0.7f)
+            lineTo(ox + size * 0.9f, oy + size * 0.7f)
+            close()
+        }
+        drawPath(path, Color(0xFFFF5722))
+        drawPath(path, Color.White, style = Stroke(3f))
+
+        val paint = AndroidPaint().apply {
+            color = android.graphics.Color.WHITE
+            textSize = 30f
+            isAntiAlias = true
+            isFakeBoldText = true
+            textAlign = AndroidPaint.Align.CENTER
+            setShadowLayer(6f, 0f, 0f, android.graphics.Color.BLACK)
+        }
+        drawContext.canvas.nativeCanvas.drawText(
+            "${o.terrainMeters.toInt()} м",
+            ox,
+            oy - size - 12f,
+            paint
+        )
     }
 }
 
