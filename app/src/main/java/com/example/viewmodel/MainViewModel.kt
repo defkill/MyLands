@@ -570,6 +570,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun refreshElevationAvailability() {
         _hasElevationData.value = elevationEngine.hasAnyTiles()
+
+        // Recompute for where the map is standing right now. The watcher only reacts to the
+        // centre MOVING, so after importing tiles while the map sits still the height would
+        // otherwise stay empty until the user nudged the map.
+        if (_hasElevationData.value) {
+            val point = _mapCenter.value
+            viewModelScope.launch {
+                _terrainElevation.value = withContext(Dispatchers.IO) {
+                    elevationEngine.getElevation(point.latitude, point.longitude)
+                }
+            }
+        } else {
+            _terrainElevation.value = null
+        }
     }
 
     /** Tile names covering the current view, and which are missing. */
@@ -944,15 +958,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         colorArgb: Int = 0xFFFF5722.toInt()
     ) {
         val candidate = _candidatePoint.value ?: return
-        addWaypointAt(
-            name = name,
-            latitude = candidate.latitude,
-            longitude = candidate.longitude,
-            altitude = candidate.altitude,
-            description = description,
-            colorArgb = colorArgb
-        )
-        clearCandidatePoint()
+        viewModelScope.launch {
+            // Store a real height with the point: SRTM terrain first, then whatever the
+            // candidate already carried. Without this the waypoint was saved with no altitude
+            // and its card showed nothing later, even with elevation data available.
+            val altitude = candidate.altitude ?: withContext(Dispatchers.IO) {
+                if (_hasElevationData.value) {
+                    elevationEngine.getElevation(candidate.latitude, candidate.longitude)
+                } else null
+            }
+            addWaypointAt(
+                name = name,
+                latitude = candidate.latitude,
+                longitude = candidate.longitude,
+                altitude = altitude,
+                description = description,
+                colorArgb = colorArgb
+            )
+            clearCandidatePoint()
+        }
     }
 
     fun deleteWaypoint(id: Long) {
