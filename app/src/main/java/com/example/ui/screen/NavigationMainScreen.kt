@@ -77,6 +77,8 @@ fun NavigationMainScreen(
     val terrainElevation by viewModel.terrainElevation.collectAsStateWithLifecycle()
     val losResult by viewModel.losResult.collectAsStateWithLifecycle()
     val isCalculatingLos by viewModel.isCalculatingLos.collectAsStateWithLifecycle()
+    val isPickingLosTarget by viewModel.isPickingLosTarget.collectAsStateWithLifecycle()
+    val losObserver by viewModel.losObserver.collectAsStateWithLifecycle()
     val observerHeight by viewModel.observerHeight.collectAsStateWithLifecycle()
     val targetHeight by viewModel.targetHeight.collectAsStateWithLifecycle()
     val sightMode by viewModel.sightMode.collectAsStateWithLifecycle()
@@ -232,13 +234,22 @@ fun NavigationMainScreen(
                 tileManager = viewModel.tileManager,
                 waypoints = waypoints,
                 selectedWaypoint = selectedWaypoint,
-                onWaypointSelected = {
-                    viewModel.selectWaypoint(it)
-                    editingWaypoint = it
+                onWaypointSelected = { wp ->
+                    if (isPickingLosTarget) {
+                        // While sighting, tapping a waypoint chooses target B instead of
+                        // opening its editor.
+                        viewModel.pickLosTarget(wp.toGeoPoint())
+                    } else {
+                        viewModel.selectWaypoint(wp)
+                        editingWaypoint = wp
+                    }
                 },
                 candidatePoint = candidatePoint,
                 activeMapTool = activeMapTool,
-                onMapTapped = { viewModel.onMapTapped(it) },
+                onMapTapped = { pt ->
+                    if (isPickingLosTarget) viewModel.pickLosTarget(pt)
+                    else viewModel.onMapTapped(pt)
+                },
                 rulerState = rulerState,
                 onRulerPointChanged = { p1, p2 -> viewModel.updateRulerPoints(p1, p2) },
                 routeBuilderState = routeBuilderState,
@@ -699,10 +710,17 @@ fun NavigationMainScreen(
                     val targetRuler = remember(userPt, targetPt) {
                         RulerState.calculate(userPt, targetPt)
                     }
+                    // Terrain height for the selected/candidate point, fetched once per point.
+                    var pointElevation by remember(targetPt) { mutableStateOf<Double?>(null) }
+                    LaunchedEffect(targetPt) {
+                        viewModel.elevationForPoint(targetPt) { pointElevation = it }
+                    }
+                    val elevationSuffix = pointElevation?.let { " • H: ${it.toInt()} м" } ?: ""
+
                     val title = if (candidatePoint != null) {
-                        "ТОЧКА-КАНДИДАТ"
+                        "ТОЧКА-КАНДИДАТ$elevationSuffix"
                     } else {
-                        "ТОЧКА: ${selectedWaypoint?.name}"
+                        "ТОЧКА: ${selectedWaypoint?.name}$elevationSuffix"
                     }
                     val icon = if (candidatePoint != null) Icons.Default.Adjust else Icons.Default.Place
                     val iconTint = if (candidatePoint != null) Color(0xFFFF9800) else Color(0xFF00E5FF)
@@ -724,6 +742,22 @@ fun NavigationMainScreen(
                                 viewModel.clearSelectedWaypoint()
                             }
                         }
+                    )
+                }
+
+                // Visibility check overlay: stays on the map so the ray remains visible.
+                if (isPickingLosTarget || losResult != null) {
+                    VisibilityCheckOverlay(
+                        result = losResult,
+                        isPickingTarget = isPickingLosTarget,
+                        isCalculating = isCalculatingLos,
+                        onCreateObstacleWaypoint = {
+                            viewModel.createObstacleWaypoint()
+                            Toast.makeText(context, "Точка на препятствии создана", Toast.LENGTH_SHORT).show()
+                        },
+                        onOpenSettings = { showLosDialog = true },
+                        onClose = { viewModel.cancelVisibilityCheck() },
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
                     )
                 }
 
@@ -901,9 +935,10 @@ fun NavigationMainScreen(
                 editingWaypoint = null
             },
             onCheckVisibility = {
-                viewModel.startLineOfSight(from = effectiveLocation, to = wp.toGeoPoint())
+                // The tapped waypoint is the OBSERVER; the target is chosen next.
+                viewModel.beginVisibilityCheck(wp.toGeoPoint())
                 editingWaypoint = null
-                showLosDialog = true
+                Toast.makeText(context, "Выберите цель на карте", Toast.LENGTH_SHORT).show()
             },
             onDelete = {
                 viewModel.deleteWaypoint(wp.id)
