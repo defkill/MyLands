@@ -10,6 +10,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -253,12 +254,17 @@ fun NavigationMainScreen(
             )
 
             // 2. Top Tactical Header Overlay
+            //
+            // Scrolls horizontally instead of distributing chips across the full width: with
+            // SpaceBetween on a narrow phone every added chip squeezed the others and pushed
+            // the last one (НП) off screen entirely.
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
-                    .align(Alignment.TopCenter),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                    .align(Alignment.TopCenter)
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 // Compass Rose & Heading Pill
@@ -500,28 +506,6 @@ fun NavigationMainScreen(
                                 fontSize = 11.sp
                             )
                         }
-                        }
-                    }
-
-                    // QR scanner: receive a point with every radio off.
-                    Surface(
-                        onClick = { showQrScanner = true },
-                        color = Color(0xDD161C24),
-                        shape = RoundedCornerShape(20.dp),
-                        modifier = Modifier.testTag("qr_scanner_button")
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                Icons.Default.QrCodeScanner,
-                                contentDescription = "Сканер QR",
-                                tint = Color(0xFF80DEEA),
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(3.dp))
-                            Text("QR", color = Color.White, fontSize = 11.sp)
                         }
                     }
 
@@ -792,6 +776,14 @@ fun NavigationMainScreen(
             selectedSystem = userPreferences.defaultCoordinateSystem,
             onSystemSelected = { sys -> viewModel.setCoordinateSystem(sys) },
             onJumpToPoint = { pt -> viewModel.setMapCenter(pt) },
+            onShowQr = {
+                showQrDialogFor = "Точка на карте" to mapCenter
+                viewModel.closeCoordinateModal()
+            },
+            onScanQr = {
+                viewModel.closeCoordinateModal()
+                showQrScanner = true
+            },
             onDismiss = { viewModel.closeCoordinateModal() }
         )
     }
