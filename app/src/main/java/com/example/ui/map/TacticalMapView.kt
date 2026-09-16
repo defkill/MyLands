@@ -61,6 +61,8 @@ fun TacticalMapView(
     regionSelection: RegionBounds? = null,
     onRegionSelected: (RegionBounds) -> Unit = {},
     losResult: LineOfSightResult? = null,
+    losObserver: GeoPoint? = null,
+    losTarget: GeoPoint? = null,
     activeTrackPoints: List<TrackPointEntity>,
     angleUnit: AngleUnit,
     modifier: Modifier = Modifier
@@ -268,9 +270,13 @@ fun TacticalMapView(
             drawRegionSelection(regionSelection, center, zoom, width, height)
         }
 
-        // 5c. Draw the line-of-sight ray, green where it clears and red where terrain blocks it
+        // 5c. Sight line. With terrain data it is a green/red ray showing where the view is
+        // blocked; without it, a plain bearing line so the azimuth and distance are still usable
+        // in the field rather than showing nothing at all.
         if (losResult != null) {
             drawLineOfSight(losResult, center, zoom, width, height)
+        } else if (losObserver != null && losTarget != null) {
+            drawPlainSightLine(losObserver, losTarget, center, zoom, width, height, angleUnit)
         }
 
         // 6. Draw Ruler
@@ -456,6 +462,59 @@ private fun DrawScope.drawTrackPoints(
             pathEffect = effect
         )
     }
+}
+
+private fun DrawScope.drawPlainSightLine(
+    observer: GeoPoint,
+    target: GeoPoint,
+    center: GeoPoint,
+    zoom: Double,
+    width: Float,
+    height: Float,
+    angleUnit: AngleUnit
+) {
+    val (ax, ay) = MapProjection.geoToScreen(
+        observer, center.latitude, center.longitude, zoom, width, height
+    )
+    val (bx, by) = MapProjection.geoToScreen(
+        target, center.latitude, center.longitude, zoom, width, height
+    )
+
+    // Dashed and yellow so it reads as "bearing only, terrain unknown" rather than an
+    // analysed result.
+    drawLine(
+        color = Color(0xFFFFD54F),
+        start = Offset(ax, ay),
+        end = Offset(bx, by),
+        strokeWidth = 5f,
+        pathEffect = PathEffect.dashPathEffect(floatArrayOf(20f, 12f), 0f)
+    )
+
+    drawCircle(Color.White, radius = 7f, center = Offset(ax, ay))
+    drawCircle(Color(0xFFFFD54F), radius = 9f, center = Offset(bx, by), style = Stroke(3f))
+
+    val distance = GeodesyEngine.distanceMeters(observer, target)
+    val azimuth = GeodesyEngine.azimuthDegrees(observer, target)
+    val distStr = if (distance >= 1000.0) {
+        String.format(java.util.Locale.US, "%.2f км", distance / 1000.0)
+    } else {
+        String.format(java.util.Locale.US, "%.0f м", distance)
+    }
+
+    val paint = AndroidPaint().apply {
+        color = android.graphics.Color.rgb(255, 213, 79)
+        textSize = 28f
+        isAntiAlias = true
+        isFakeBoldText = true
+        textAlign = AndroidPaint.Align.CENTER
+        setShadowLayer(6f, 0f, 0f, android.graphics.Color.BLACK)
+    }
+    drawContext.canvas.nativeCanvas.drawText(
+        "${AngleUnit.format(azimuth, angleUnit)} · $distStr",
+        (ax + bx) / 2f,
+        (ay + by) / 2f - 14f,
+        paint
+    )
 }
 
 private fun DrawScope.drawLineOfSight(
