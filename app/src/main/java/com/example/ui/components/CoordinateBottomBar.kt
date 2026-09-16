@@ -95,21 +95,13 @@ fun CoordinateBottomBar(
                 }
 
                 // Elevation & Crosshair Indicator
-                //
-                // One height field fed by two sources, in priority order:
-                //   1. SRTM terrain height — defined for any point on the map (green);
-                //   2. GPS altitude — only exists where the user physically is (blue).
-                // Showing the GPS value alone made the height vanish the instant the map was
-                // panned off the user's position. When neither is available the field stays
-                // visible as "H: ---" so it is obvious that no .hgt tile is loaded for this
-                // square, rather than looking like the feature is broken.
                 Column(horizontalAlignment = Alignment.End) {
-                    val displayElevation = terrainElevation ?: crosshairPoint.altitude
-                    if (displayElevation != null) {
+                    val alt = terrainElevation ?: crosshairPoint.altitude
+                    if (alt != null) {
                         Text(
-                            text = String.format(Locale.US, "H: %.0f м", displayElevation),
+                            text = String.format(Locale.US, "H: %.0f м", alt),
                             color = if (terrainElevation != null) Color(0xFF81C784) else Color(0xFF90CAF9),
-                            fontSize = 13.sp,
+                            fontSize = 14.sp,
                             fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.Bold
                         )
@@ -148,6 +140,14 @@ fun CoordinateBottomBar(
                     fontFamily = FontFamily.Monospace
                 )
 
+                if (terrainElevation != null) {
+                    Text(
+                        text = "SRTM рельеф",
+                        color = Color(0xFF81C784),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
 
                 // GPS / PDR Telemetry
                 val gpsColor = when (gpsStatus) {

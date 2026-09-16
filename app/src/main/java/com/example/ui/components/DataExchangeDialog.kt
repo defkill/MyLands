@@ -8,7 +8,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -39,6 +41,7 @@ fun DataExchangeDialog(
     val coroutineScope = rememberCoroutineScope()
     var isProcessing by remember { mutableStateOf(false) }
     var statusMessage by remember { mutableStateOf<String?>(null) }
+    var selectedTab by remember { mutableIntStateOf(0) }
 
     val activeMbtiles by viewModel.activeMbtiles.collectAsState()
     val hasOfflineOrntpack by viewModel.hasOfflineOrntpack.collectAsState()
@@ -213,281 +216,349 @@ fun DataExchangeDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
                     .padding(vertical = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text(
-                    text = "Точки и маршруты — GPX/KML. Офлайн-карты — .mbtiles и .orntpack.",
-                    color = Color(0xFFB0BEC5),
-                    fontSize = 12.sp
-                )
-
                 if (isProcessing) {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = Color(0xFF81C784))
                 }
 
-                HorizontalDivider(color = Color(0xFF37474F))
-
-                Text(
-                    text = "НАВИГАЦИОННЫЕ ДАННЫЕ (GPX / KML)",
-                    color = Color(0xFF81C784),
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold
-                )
-
-                // 1. Export to GPX
-                OutlinedButton(
-                    onClick = {
-                        coroutineScope.launch {
-                            isProcessing = true
-                            try {
-                                val gpxFile = File(context.cacheDir, "tactical_navigation_export.gpx")
-                                viewModel.exportToGpx(gpxFile)
-                                shareFile(context, gpxFile, "application/gpx+xml", "Экспорт путевых точек и маршрутов в GPX")
-                            } catch (e: Exception) {
-                                Toast.makeText(context, "Ошибка экспорта GPX: ${e.message}", Toast.LENGTH_SHORT).show()
-                            } finally {
-                                isProcessing = false
-                            }
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth().testTag("export_gpx_button"),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
+                // 3 Section Tabs
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color(0xFF81C784))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Экспорт точек и маршрутов (GPX)")
-                }
-
-                // 2. Export to KML
-                OutlinedButton(
-                    onClick = {
-                        coroutineScope.launch {
-                            isProcessing = true
-                            try {
-                                val kmlFile = File(context.cacheDir, "tactical_navigation_export.kml")
-                                viewModel.exportToKml(kmlFile)
-                                shareFile(context, kmlFile, "application/vnd.google-earth.kml+xml", "Экспорт путевых точек и маршрутов в KML")
-                            } catch (e: Exception) {
-                                Toast.makeText(context, "Ошибка экспорта KML: ${e.message}", Toast.LENGTH_SHORT).show()
-                            } finally {
-                                isProcessing = false
-                            }
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth().testTag("export_kml_button"),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
-                ) {
-                    Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color(0xFF4FC3F7))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Экспорт точек и маршрутов (KML)")
-                }
-
-                // 3. Import GPX / KML
-                Button(
-                    onClick = {
-                        importFileLauncher.launch(arrayOf("*/*"))
-                    },
-                    modifier = Modifier.fillMaxWidth().testTag("import_gpx_kml_button"),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
-                ) {
-                    Icon(Icons.Default.FileOpen, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Импорт из файла (GPX / KML)", fontWeight = FontWeight.Bold)
+                    FilterChip(
+                        selected = selectedTab == 0,
+                        onClick = { selectedTab = 0 },
+                        label = { Text("Навигация", fontSize = 11.sp) },
+                        leadingIcon = { Icon(Icons.Default.Route, contentDescription = null, modifier = Modifier.size(14.dp)) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Color(0xFF2E7D32),
+                            selectedLabelColor = Color.White
+                        ),
+                        modifier = Modifier.weight(1f)
+                    )
+                    FilterChip(
+                        selected = selectedTab == 1,
+                        onClick = { selectedTab = 1 },
+                        label = { Text("Карты", fontSize = 11.sp) },
+                        leadingIcon = { Icon(Icons.Default.Map, contentDescription = null, modifier = Modifier.size(14.dp)) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Color(0xFF00695C),
+                            selectedLabelColor = Color.White
+                        ),
+                        modifier = Modifier.weight(1f)
+                    )
+                    FilterChip(
+                        selected = selectedTab == 2,
+                        onClick = { selectedTab = 2 },
+                        label = { Text("Рельеф", fontSize = 11.sp) },
+                        leadingIcon = { Icon(Icons.Default.Terrain, contentDescription = null, modifier = Modifier.size(14.dp)) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Color(0xFF00838F),
+                            selectedLabelColor = Color.White
+                        ),
+                        modifier = Modifier.weight(1f)
+                    )
                 }
 
                 HorizontalDivider(color = Color(0xFF37474F))
 
-                Text(
-                    text = "ОФЛАЙН-КАРТЫ (.MBTILES И .ORNTPACK)",
-                    color = Color(0xFFFFB74D),
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold
-                )
-
-                Text(
-                    text = "Поддерживаются .mbtiles (QGIS, SAS.Planet) и .orntpack. Импортированный .orntpack сливается с уже сохранёнными картами, поэтому следующий выгруженный файл будет содержать и его, и новые тайлы.",
-                    color = Color(0xFF90A4AE),
-                    fontSize = 11.sp
-                )
-
-                // Status indicator for active offline maps
-                if (activeMbtiles != null) {
-                    Surface(
-                        color = Color(0x2281C784),
-                        shape = RoundedCornerShape(8.dp),
-                        border = BorderStroke(1.dp, Color(0xFF81C784)),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(Icons.Default.Storage, contentDescription = null, tint = Color(0xFF81C784), modifier = Modifier.size(20.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("MBTiles: ${activeMbtiles?.name}", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                Text("Зум: ${activeMbtiles?.minZoom}..${activeMbtiles?.maxZoom} • Прямой SQLite доступ", color = Color(0xFFB0BEC5), fontSize = 10.sp)
-                            }
-                            if (activeTileSource.id == activeMbtiles?.id) {
-                                Icon(Icons.Default.CheckCircle, contentDescription = "Активна", tint = Color(0xFF81C784), modifier = Modifier.size(18.dp))
-                            } else {
-                                TextButton(
-                                    onClick = { activeMbtiles?.let { viewModel.setTileSource(it) } },
-                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
-                                ) {
-                                    Text("Включить", color = Color(0xFF81C784), fontSize = 11.sp)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if (hasOfflineOrntpack) {
-                    Surface(
-                        color = Color(0x22FFB74D),
-                        shape = RoundedCornerShape(8.dp),
-                        border = BorderStroke(1.dp, Color(0xFFFFB74D)),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(Icons.Default.Archive, contentDescription = null, tint = Color(0xFFFFB74D), modifier = Modifier.size(20.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Пакет .orntpack подключен в кэш тайлов", color = Color.White, fontSize = 12.sp)
-                        }
-                    }
-                }
-
-                // 4. Import Offline Map with auto-detection (.mbtiles or .orntpack)
-                Button(
-                    onClick = {
-                        importMapLauncher.launch(arrayOf("*/*"))
-                    },
-                    modifier = Modifier.fillMaxWidth().testTag("import_map_auto_button"),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00695C))
-                ) {
-                    Icon(Icons.Default.AddLocationAlt, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Импортировать карту", fontWeight = FontWeight.Bold)
-                }
-
-                // Cache size readout: makes it obvious whether there is anything to pack.
-                val cacheStats = remember(isProcessing) { viewModel.tileManager.getCacheStats() }
-                Text(
-                    text = if (cacheStats.first == 0) {
-                        "Карт пока нет — они сохраняются автоматически при просмотре онлайн."
-                    } else {
-                        String.format(
-                            java.util.Locale.US,
-                            "Сохранено %d тайлов (%.1f МБ). Импортированные карты добавляются сюда же.",
-                            cacheStats.first,
-                            cacheStats.second / 1024.0 / 1024.0
+                when (selectedTab) {
+                    0 -> {
+                        // --- НАВИГАЦИОННЫЕ ДАННЫЕ (GPX / KML) ---
+                        Text(
+                            text = "НАВИГАЦИОННЫЕ ДАННЫЕ (GPX / KML)",
+                            color = Color(0xFF81C784),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
                         )
-                    },
-                    color = Color(0xFF78909C),
-                    fontSize = 11.sp
-                )
 
-                HorizontalDivider(color = Color(0xFF37474F))
-                Spacer(modifier = Modifier.height(10.dp))
-
-                Text(
-                    "РЕЛЬЕФ (SRTM / .HGT)",
-                    color = Color(0xFF80DEEA),
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-
-                // Tell the user exactly which squares their area needs: working out that it is
-                // "N50E036" from a map is not obvious.
-                val (needed, missing) = remember(isProcessing) { viewModel.elevationTilesForCurrentView() }
-                Text(
-                    text = if (missing.isEmpty()) {
-                        "Для текущей области есть всё: ${needed.joinToString(", ")}"
-                    } else {
-                        "Для текущей области нужны: ${needed.joinToString(", ")}\nОтсутствуют: ${missing.joinToString(", ")}"
-                    },
-                    color = if (missing.isEmpty()) Color(0xFF81C784) else Color(0xFFFFB74D),
-                    fontSize = 11.sp
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-
-                OutlinedButton(
-                    onClick = { importElevationLauncher.launch(arrayOf("*/*")) },
-                    modifier = Modifier.fillMaxWidth().testTag("import_elevation_button"),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
-                ) {
-                    Icon(Icons.Default.Terrain, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color(0xFF80DEEA))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Импортировать рельеф (.hgt / .zip)")
-                }
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                // 5. Pack all stored tiles to .orntpack — save to a folder
-                OutlinedButton(
-                    onClick = {
-                        coroutineScope.launch {
-                            isProcessing = true
-                            try {
-                                val packFile = File(context.cacheDir, "tactical_map_region.orntpack")
-                                val count = viewModel.packCurrentCache(packFile)
-                                if (count > 0) {
-                                    pendingSaveFile = packFile
-                                    val stamp = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US)
-                                        .format(java.util.Date())
-                                    saveMapLauncher.launch("maps_$stamp.orntpack")
-                                } else {
-                                    Toast.makeText(context, "Карт пока нет. Просмотрите нужный регион онлайн перед упаковкой.", Toast.LENGTH_LONG).show()
+                        // 1. Export to GPX
+                        OutlinedButton(
+                            onClick = {
+                                coroutineScope.launch {
+                                    isProcessing = true
+                                    try {
+                                        val gpxFile = File(context.cacheDir, "tactical_navigation_export.gpx")
+                                        viewModel.exportToGpx(gpxFile)
+                                        shareFile(context, gpxFile, "application/gpx+xml", "Экспорт путевых точек и маршрутов в GPX")
+                                    } catch (e: Exception) {
+                                        Toast.makeText(context, "Ошибка экспорта GPX: ${e.message}", Toast.LENGTH_SHORT).show()
+                                    } finally {
+                                        isProcessing = false
+                                    }
                                 }
-                            } catch (e: Exception) {
-                                Toast.makeText(context, "Ошибка упаковки: ${e.message}", Toast.LENGTH_SHORT).show()
-                            } finally {
-                                isProcessing = false
+                            },
+                            modifier = Modifier.fillMaxWidth().testTag("export_gpx_button"),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
+                        ) {
+                            Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color(0xFF81C784))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Экспорт точек и маршрутов (GPX)")
+                        }
+
+                        // 2. Export to KML
+                        OutlinedButton(
+                            onClick = {
+                                coroutineScope.launch {
+                                    isProcessing = true
+                                    try {
+                                        val kmlFile = File(context.cacheDir, "tactical_navigation_export.kml")
+                                        viewModel.exportToKml(kmlFile)
+                                        shareFile(context, kmlFile, "application/vnd.google-earth.kml+xml", "Экспорт путевых точек и маршрутов в KML")
+                                    } catch (e: Exception) {
+                                        Toast.makeText(context, "Ошибка экспорта KML: ${e.message}", Toast.LENGTH_SHORT).show()
+                                    } finally {
+                                        isProcessing = false
+                                    }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth().testTag("export_kml_button"),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
+                        ) {
+                            Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color(0xFF4FC3F7))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Экспорт точек и маршрутов (KML)")
+                        }
+
+                        // 3. Import GPX / KML
+                        Button(
+                            onClick = {
+                                importFileLauncher.launch(arrayOf("*/*"))
+                            },
+                            modifier = Modifier.fillMaxWidth().testTag("import_gpx_kml_button"),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
+                        ) {
+                            Icon(Icons.Default.FileOpen, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Импорт из файла (GPX / KML)", fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    1 -> {
+                        // --- ОФЛАЙН КАРТЫ ---
+                        Text(
+                            text = "ОФЛАЙН-КАРТЫ (.MBTILES И .ORNTPACK)",
+                            color = Color(0xFFFFB74D),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+
+                        Text(
+                            text = "Поддерживаются .mbtiles (QGIS, SAS.Planet) и .orntpack. Импортированный .orntpack сливается с уже сохранёнными картами.",
+                            color = Color(0xFF90A4AE),
+                            fontSize = 11.sp
+                        )
+
+                        // Status indicator for active offline maps
+                        if (activeMbtiles != null) {
+                            Surface(
+                                color = Color(0x2281C784),
+                                shape = RoundedCornerShape(8.dp),
+                                border = BorderStroke(1.dp, Color(0xFF81C784)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Default.Storage, contentDescription = null, tint = Color(0xFF81C784), modifier = Modifier.size(20.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text("MBTiles: ${activeMbtiles?.name}", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                        Text("Зум: ${activeMbtiles?.minZoom}..${activeMbtiles?.maxZoom} • Прямой SQLite доступ", color = Color(0xFFB0BEC5), fontSize = 10.sp)
+                                    }
+                                    if (activeTileSource.id == activeMbtiles?.id) {
+                                        Icon(Icons.Default.CheckCircle, contentDescription = "Активна", tint = Color(0xFF81C784), modifier = Modifier.size(18.dp))
+                                    } else {
+                                        TextButton(
+                                            onClick = { activeMbtiles?.let { viewModel.setTileSource(it) } },
+                                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                                        ) {
+                                            Text("Включить", color = Color(0xFF81C784), fontSize = 11.sp)
+                                        }
+                                    }
+                                }
                             }
                         }
-                    },
-                    modifier = Modifier.fillMaxWidth().testTag("save_orntpack_button"),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
-                ) {
-                    Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color(0xFF81C784))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Сохранить все карты в файл")
-                }
 
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // 6. Pack all stored tiles to .orntpack — share directly
-                OutlinedButton(
-                    onClick = {
-                        coroutineScope.launch {
-                            isProcessing = true
-                            try {
-                                val packFile = File(context.cacheDir, "tactical_map_region.orntpack")
-                                val count = viewModel.packCurrentCache(packFile)
-                                if (count > 0) {
-                                    Toast.makeText(context, "Упаковано $count тайлов", Toast.LENGTH_SHORT).show()
-                                    shareFile(context, packFile, "application/zip", "Поделиться пакетом карт .orntpack")
-                                } else {
-                                    Toast.makeText(context, "Карт пока нет. Просмотрите нужный регион онлайн перед упаковкой.", Toast.LENGTH_LONG).show()
+                        if (hasOfflineOrntpack) {
+                            Surface(
+                                color = Color(0x22FFB74D),
+                                shape = RoundedCornerShape(8.dp),
+                                border = BorderStroke(1.dp, Color(0xFFFFB74D)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Default.Archive, contentDescription = null, tint = Color(0xFFFFB74D), modifier = Modifier.size(20.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Пакет .orntpack подключен в кэш тайлов", color = Color.White, fontSize = 12.sp)
                                 }
-                            } catch (e: Exception) {
-                                Toast.makeText(context, "Ошибка упаковки: ${e.message}", Toast.LENGTH_SHORT).show()
-                            } finally {
-                                isProcessing = false
                             }
                         }
-                    },
-                    modifier = Modifier.fillMaxWidth().testTag("pack_orntpack_button"),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
-                ) {
-                    Icon(Icons.Default.Archive, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color(0xFFFFB74D))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Отправить все карты файлом")
+
+                        // Import Offline Map
+                        Button(
+                            onClick = { importMapLauncher.launch(arrayOf("*/*")) },
+                            modifier = Modifier.fillMaxWidth().testTag("import_map_auto_button"),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00695C))
+                        ) {
+                            Icon(Icons.Default.AddLocationAlt, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Импортировать карту", fontWeight = FontWeight.Bold)
+                        }
+
+                        val cacheStats = remember(isProcessing) { viewModel.tileManager.getCacheStats() }
+                        Text(
+                            text = if (cacheStats.first == 0) {
+                                "Карт пока нет — они сохраняются автоматически при просмотре онлайн."
+                            } else {
+                                String.format(
+                                    java.util.Locale.US,
+                                    "Сохранено %d тайлов (%.1f МБ).",
+                                    cacheStats.first,
+                                    cacheStats.second / 1024.0 / 1024.0
+                                )
+                            },
+                            color = Color(0xFF78909C),
+                            fontSize = 11.sp
+                        )
+
+                        // Save / Share maps
+                        OutlinedButton(
+                            onClick = {
+                                coroutineScope.launch {
+                                    isProcessing = true
+                                    try {
+                                        val packFile = File(context.cacheDir, "tactical_map_region.orntpack")
+                                        val count = viewModel.packCurrentCache(packFile)
+                                        if (count > 0) {
+                                            pendingSaveFile = packFile
+                                            val stamp = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US)
+                                                .format(java.util.Date())
+                                            saveMapLauncher.launch("maps_$stamp.orntpack")
+                                        } else {
+                                            Toast.makeText(context, "Карт пока нет. Просмотрите нужный регион онлайн перед упаковкой.", Toast.LENGTH_LONG).show()
+                                        }
+                                    } catch (e: Exception) {
+                                        Toast.makeText(context, "Ошибка упаковки: ${e.message}", Toast.LENGTH_SHORT).show()
+                                    } finally {
+                                        isProcessing = false
+                                    }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth().testTag("save_orntpack_button"),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
+                        ) {
+                            Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color(0xFF81C784))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Сохранить все карты в файл")
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                coroutineScope.launch {
+                                    isProcessing = true
+                                    try {
+                                        val packFile = File(context.cacheDir, "tactical_map_region.orntpack")
+                                        val count = viewModel.packCurrentCache(packFile)
+                                        if (count > 0) {
+                                            Toast.makeText(context, "Упаковано $count тайлов", Toast.LENGTH_SHORT).show()
+                                            shareFile(context, packFile, "application/zip", "Поделиться пакетом карт .orntpack")
+                                        } else {
+                                            Toast.makeText(context, "Карт пока нет. Просмотрите нужный регион онлайн перед упаковкой.", Toast.LENGTH_LONG).show()
+                                        }
+                                    } catch (e: Exception) {
+                                        Toast.makeText(context, "Ошибка упаковки: ${e.message}", Toast.LENGTH_SHORT).show()
+                                    } finally {
+                                        isProcessing = false
+                                    }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth().testTag("pack_orntpack_button"),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
+                        ) {
+                            Icon(Icons.Default.Archive, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color(0xFFFFB74D))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Отправить все карты файлом")
+                        }
+                    }
+
+                    2 -> {
+                        // --- РЕЛЬЕФ (SRTM / .HGT) ---
+                        Text(
+                            "РЕЛЬЕФ (SRTM / .HGT)",
+                            color = Color(0xFF80DEEA),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+
+                        val (needed, missing) = remember(isProcessing) { viewModel.elevationTilesForCurrentView() }
+                        Surface(
+                            color = if (missing.isEmpty()) Color(0x2281C784) else Color(0x22FFB74D),
+                            shape = RoundedCornerShape(8.dp),
+                            border = BorderStroke(1.dp, if (missing.isEmpty()) Color(0xFF81C784) else Color(0xFFFFB74D)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Text(
+                                    text = if (missing.isEmpty()) "ДАННЫЕ ДЛЯ ТЕКУЩЕГО ЭКРАНА ЕСТЬ" else "ТРЕБУЮТСЯ ФАЙЛЫ РЕЛЬЕФА",
+                                    color = if (missing.isEmpty()) Color(0xFF81C784) else Color(0xFFFFB74D),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = if (missing.isEmpty()) {
+                                        "Квадраты: ${needed.joinToString(", ")}"
+                                    } else {
+                                        "Нужны: ${needed.joinToString(", ")}\nНе найдены: ${missing.joinToString(", ")}"
+                                    },
+                                    color = Color.White,
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
+
+                        // Big prominent button for importing elevation
+                        Button(
+                            onClick = { importElevationLauncher.launch(arrayOf("*/*")) },
+                            modifier = Modifier.fillMaxWidth().testTag("import_elevation_button"),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00838F))
+                        ) {
+                            Icon(Icons.Default.Terrain, contentDescription = null, modifier = Modifier.size(20.dp), tint = Color.White)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Импортировать рельеф (.hgt / .zip)", fontWeight = FontWeight.Bold)
+                        }
+
+                        // List of available tiles
+                        val available = remember(isProcessing) { viewModel.elevationEngine.availableTiles() }
+                        if (available.isNotEmpty()) {
+                            Text(
+                                "Загружено на устройство (${available.size}): ${available.joinToString(", ")}",
+                                color = Color(0xFFB0BEC5),
+                                fontSize = 11.sp
+                            )
+                        } else {
+                            Text(
+                                "На устройстве пока нет ни одного файла высот.",
+                                color = Color(0xFF90A4AE),
+                                fontSize = 11.sp
+                            )
+                        }
+
+                        Text(
+                            text = "Файлы SRTM (.hgt) позволяют рассчитывать прямую видимость, высоту точек и строить профиль высот без интернета. Поддерживаются квадраты SRTM-1 (30м) и SRTM-3 (90м).",
+                            color = Color(0xFF78909C),
+                            fontSize = 10.sp
+                        )
+                    }
                 }
             }
         },

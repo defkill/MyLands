@@ -73,6 +73,7 @@ class ElevationEngine(private val context: Context) {
         elevationDir.listFiles()
             ?.filter { it.isFile && it.name.endsWith(".hgt", ignoreCase = true) }
             ?.map { it.nameWithoutExtension.uppercase() }
+            ?.distinct()
             ?.sorted()
             ?: emptyList()
 
@@ -103,24 +104,39 @@ class ElevationEngine(private val context: Context) {
     }
 
     private fun openTile(name: String): Tile? {
-        openTiles[name]?.let { return it }
+        val cleanName = name.uppercase().removeSuffix(".HGT")
+        openTiles[cleanName]?.let { return it }
 
-        val file = File(elevationDir, "$name.hgt")
-        if (!file.exists()) return null
+        // Find file case-insensitively on disk
+        val candidateFiles = listOf(
+            File(elevationDir, "$cleanName.hgt"),
+            File(elevationDir, "$cleanName.HGT"),
+            File(elevationDir, "${cleanName.lowercase()}.hgt")
+        )
+        val file = candidateFiles.firstOrNull { it.exists() } ?: run {
+            elevationDir.listFiles()?.firstOrNull {
+                it.nameWithoutExtension.equals(cleanName, ignoreCase = true) &&
+                it.extension.equals("hgt", ignoreCase = true)
+            }
+        } ?: run {
+            Log.w(TAG, "Tile file not found for $cleanName in ${elevationDir.absolutePath}")
+            return null
+        }
 
         return try {
-            val size = when (file.length()) {
-                SIZE_SRTM1.toLong() * SIZE_SRTM1 * 2 -> SIZE_SRTM1
-                SIZE_SRTM3.toLong() * SIZE_SRTM3 * 2 -> SIZE_SRTM3
+            val len = file.length()
+            val size = when {
+                len >= SIZE_SRTM1.toLong() * SIZE_SRTM1 * 2 -> SIZE_SRTM1
+                len >= SIZE_SRTM3.toLong() * SIZE_SRTM3 * 2 -> SIZE_SRTM3
                 else -> {
-                    Log.w(TAG, "$name: unexpected size ${file.length()}")
+                    Log.w(TAG, "$cleanName: unexpected size $len bytes")
                     return null
                 }
             }
 
             val raf = RandomAccessFile(file, "r")
             val buffer = raf.channel
-                .map(FileChannel.MapMode.READ_ONLY, 0, file.length())
+                .map(FileChannel.MapMode.READ_ONLY, 0, (size.toLong() * size * 2))
                 .order(ByteOrder.BIG_ENDIAN)
 
             val tile = Tile(buffer, size, raf)
@@ -129,11 +145,11 @@ class ElevationEngine(private val context: Context) {
                 val oldest = openTiles.keys.first()
                 openTiles.remove(oldest)?.let { runCatching { it.raf.close() } }
             }
-            openTiles[name] = tile
-            Log.d(TAG, "Opened $name (${size}x$size)")
+            openTiles[cleanName] = tile
+            Log.d(TAG, "Opened $cleanName (${size}x$size)")
             tile
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to open $name", e)
+            Log.e(TAG, "Failed to open $cleanName", e)
             null
         }
     }

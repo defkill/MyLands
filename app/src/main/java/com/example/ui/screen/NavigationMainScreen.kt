@@ -78,9 +78,9 @@ fun NavigationMainScreen(
     val losResult by viewModel.losResult.collectAsStateWithLifecycle()
     val isCalculatingLos by viewModel.isCalculatingLos.collectAsStateWithLifecycle()
     val isPickingLosTarget by viewModel.isPickingLosTarget.collectAsStateWithLifecycle()
+    val isLosActive by viewModel.isLosActive.collectAsStateWithLifecycle()
     val losObserver by viewModel.losObserver.collectAsStateWithLifecycle()
     val losTarget by viewModel.losTarget.collectAsStateWithLifecycle()
-    val isLosActive by viewModel.isLosActive.collectAsStateWithLifecycle()
     val observerHeight by viewModel.observerHeight.collectAsStateWithLifecycle()
     val targetHeight by viewModel.targetHeight.collectAsStateWithLifecycle()
     val sightMode by viewModel.sightMode.collectAsStateWithLifecycle()
@@ -720,18 +720,7 @@ fun NavigationMainScreen(
                     LaunchedEffect(targetPt) {
                         viewModel.elevationForPoint(targetPt) { pointElevation = it }
                     }
-                    // Height in priority order: SRTM terrain, then the height stored with the
-                    // waypoint when it was created, then whatever the point itself carries.
-                    // The label never disappears — "H: ---" says the data is missing rather
-                    // than silently dropping the field.
-                    val resolvedAltitude = pointElevation
-                        ?: selectedWaypoint?.altitudeMeters
-                        ?: targetPt.altitude
-                    val elevationSuffix = if (resolvedAltitude != null) {
-                        " • H: ${resolvedAltitude.toInt()} м"
-                    } else {
-                        " • H: ---"
-                    }
+                    val elevationSuffix = pointElevation?.let { " • H: ${it.toInt()} м" } ?: ""
 
                     val title = if (candidatePoint != null) {
                         "ТОЧКА-КАНДИДАТ$elevationSuffix"
@@ -762,10 +751,7 @@ fun NavigationMainScreen(
                 }
 
                 // Visibility check overlay: stays on the map so the ray remains visible.
-                // Driven by an explicit "tool is open" flag. Keying it off the result meant the
-                // panel disappeared the moment a target was picked, since the result is still
-                // null while the analysis runs or when no terrain tile covers the area.
-                if (isLosActive) {
+                if (isLosActive || isPickingLosTarget || losResult != null) {
                     VisibilityCheckOverlay(
                         result = losResult,
                         isPickingTarget = isPickingLosTarget,
@@ -1281,8 +1267,7 @@ fun NavigationMainScreen(
                         name = name,
                         latitude = targetPoint.latitude,
                         longitude = targetPoint.longitude,
-                        // Keep a real height with the point: terrain first, GPS second.
-                        altitude = targetPoint.altitude ?: terrainElevation,
+                        altitude = targetPoint.altitude,
                         description = desc,
                         colorArgb = color
                     )

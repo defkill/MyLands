@@ -543,15 +543,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _isPickingLosTarget = MutableStateFlow(false)
     val isPickingLosTarget: StateFlow<Boolean> = _isPickingLosTarget.asStateFlow()
 
-    /**
-     * Whether the sighting tool is open at all.
-     *
-     * Kept separate from "has a result": deriving visibility from `losResult != null` meant the
-     * panel vanished the instant the user picked a target, because picking clears the
-     * target-selection flag while the result is still null (analysis running, or no .hgt tile
-     * for the area). The tool looked like it crashed, and the "import terrain" message inside
-     * it could never be seen.
-     */
     private val _isLosActive = MutableStateFlow(false)
     val isLosActive: StateFlow<Boolean> = _isLosActive.asStateFlow()
 
@@ -564,11 +555,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _isLosActive.value = true
     }
 
-    /** Supplies point B and runs the analysis. The tool stays open regardless of the outcome. */
+    /** Supplies point B and runs the analysis. */
     fun pickLosTarget(target: GeoPoint) {
         if (_losObserver.value == null) return
         _losTarget.value = target
         _isPickingLosTarget.value = false
+        _isLosActive.value = true
         calculateLineOfSight()
     }
 
@@ -584,20 +576,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun refreshElevationAvailability() {
         _hasElevationData.value = elevationEngine.hasAnyTiles()
-
-        // Recompute for where the map is standing right now. The watcher only reacts to the
-        // centre MOVING, so after importing tiles while the map sits still the height would
-        // otherwise stay empty until the user nudged the map.
-        if (_hasElevationData.value) {
-            val point = _mapCenter.value
-            viewModelScope.launch {
-                _terrainElevation.value = withContext(Dispatchers.IO) {
-                    elevationEngine.getElevation(point.latitude, point.longitude)
-                }
-            }
-        } else {
-            _terrainElevation.value = null
-        }
     }
 
     /** Tile names covering the current view, and which are missing. */
@@ -621,14 +599,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun startCenterElevationWatcher() {
         viewModelScope.launch {
             mapCenter
-                .debounce(CENTER_ELEVATION_DEBOUNCE_MS)
+                .debounce(150L)
                 .collectLatest { point ->
-                    if (!_hasElevationData.value) {
-                        _terrainElevation.value = null
-                        return@collectLatest
-                    }
-                    _terrainElevation.value = withContext(Dispatchers.IO) {
+                    val h = withContext(Dispatchers.IO) {
                         elevationEngine.getElevation(point.latitude, point.longitude)
+                    }
+                    _terrainElevation.value = h
+                    if (h != null && !_hasElevationData.value) {
+                        _hasElevationData.value = true
                     }
                 }
         }
@@ -636,13 +614,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Elevation for an arbitrary point, used for the candidate marker card. */
     fun elevationForPoint(point: GeoPoint, onResult: (Double?) -> Unit) {
-        if (!_hasElevationData.value) {
-            onResult(null)
-            return
-        }
         viewModelScope.launch {
             val h = withContext(Dispatchers.IO) {
                 elevationEngine.getElevation(point.latitude, point.longitude)
+            }
+            if (h != null && !_hasElevationData.value) {
+                _hasElevationData.value = true
             }
             onResult(h)
         }
@@ -680,6 +657,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _losResult.value = null
         _losObserver.value = null
         _losTarget.value = null
+        _isLosActive.value = false
     }
 
     /** Saves the blocking summit as a waypoint — useful for siting a relay or an OP. */
@@ -730,9 +708,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         zip.entries().asSequence()
                             .filter { !it.isDirectory && it.name.endsWith(".hgt", true) }
                             .forEach { entry ->
-                                val name = entry.name.substringAfterLast('/')
-                                val target = java.io.File(elevationEngine.elevationDir, name.uppercase())
-                                if (!target.exists()) {
+                                val cleanName = entry.name.substringAfterLast('/').substringBeforeLast('.').uppercase()
+                                val target = java.io.File(elevationEngine.elevationDir, "$cleanName.hgt")
+                                if (!target.exists() || target.length() == 0L) {
                                     zip.getInputStream(entry).use { input ->
                                         target.outputStream().use { out -> input.copyTo(out) }
                                     }
@@ -740,16 +718,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 }
                             }
                     }
-                } else if (displayName.endsWith(".hgt", true)) {
-                    val target = java.io.File(elevationEngine.elevationDir, displayName.uppercase())
-                    if (!target.exists()) {
-                        file.copyTo(target, overwrite = false)
-                        added++
-                    }
+                } else {
+                    val cleanName = displayName.substringAfterLast('/').substringBeforeLast('.').uppercase()
+                        .ifBlank { file.nameWithoutExtension.uppercase() }
+                    val target = java.io.File(elevationEngine.elevationDir, "$cleanName.hgt")
+                    file.copyTo(target, overwrite = true)
+                    added++
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                android.util.Log.e("MainViewModel", "Error importing elevation file", e)
             }
             refreshElevationAvailability()
+            val center = _mapCenter.value
+            _terrainElevation.value = elevationEngine.getElevation(center.latitude, center.longitude)
             added
         }
 
@@ -972,25 +953,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         colorArgb: Int = 0xFFFF5722.toInt()
     ) {
         val candidate = _candidatePoint.value ?: return
-        viewModelScope.launch {
-            // Store a real height with the point: SRTM terrain first, then whatever the
-            // candidate already carried. Without this the waypoint was saved with no altitude
-            // and its card showed nothing later, even with elevation data available.
-            val altitude = candidate.altitude ?: withContext(Dispatchers.IO) {
-                if (_hasElevationData.value) {
-                    elevationEngine.getElevation(candidate.latitude, candidate.longitude)
-                } else null
-            }
-            addWaypointAt(
-                name = name,
-                latitude = candidate.latitude,
-                longitude = candidate.longitude,
-                altitude = altitude,
-                description = description,
-                colorArgb = colorArgb
-            )
-            clearCandidatePoint()
-        }
+        addWaypointAt(
+            name = name,
+            latitude = candidate.latitude,
+            longitude = candidate.longitude,
+            altitude = candidate.altitude,
+            description = description,
+            colorArgb = colorArgb
+        )
+        clearCandidatePoint()
     }
 
     fun deleteWaypoint(id: Long) {
