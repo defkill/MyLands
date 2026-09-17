@@ -18,6 +18,9 @@ interface WaypointDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(waypoint: WaypointEntity): Long
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(waypoints: List<WaypointEntity>): List<Long>
+
     @Update
     suspend fun update(waypoint: WaypointEntity)
 

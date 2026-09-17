@@ -42,8 +42,8 @@ fun TacticalMapView(
     zoom: Double,
     onCenterChanged: (GeoPoint) -> Unit,
     onZoomChanged: (Double) -> Unit,
-    userLocation: GeoPoint?,
-    orientationData: OrientationData,
+    userLocation: State<GeoPoint?>,
+    orientationData: State<OrientationData>,
     tileSource: TileSource,
     tileManager: TileManager,
     waypoints: List<WaypointEntity>,
@@ -364,7 +364,9 @@ fun TacticalMapView(
         }
 
         // 7. Draw Waypoints
-        val effectiveUser = userLocation ?: manualPosition
+        val currentUserLoc = userLocation.value
+        val currentOrientation = orientationData.value
+        val effectiveUser = currentUserLoc ?: manualPosition
         drawWaypoints(waypoints, selectedWaypoint, center, zoom, width, height, effectiveUser, angleUnit)
 
         // 7b. Draw Candidate Point & Targeting Vector
@@ -377,10 +379,10 @@ fun TacticalMapView(
         }
 
         // 8. Draw User Location Puck and Heading
-        if (userLocation != null) {
-            drawUserLocation(userLocation, orientationData, center, zoom, width, height)
+        if (currentUserLoc != null) {
+            drawUserLocation(currentUserLoc, currentOrientation, center, zoom, width, height)
         } else if (manualPosition != null) {
-            drawManualUserLocation(manualPosition, orientationData, center, zoom, width, height)
+            drawManualUserLocation(manualPosition, currentOrientation, center, zoom, width, height)
         }
 
         // 9. Draw Center Crosshair

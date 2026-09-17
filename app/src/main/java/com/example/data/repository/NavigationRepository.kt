@@ -1,11 +1,13 @@
 package com.example.data.repository
 
+import androidx.room.withTransaction
 import com.example.data.AppDatabase
 import com.example.data.entity.RouteEntity
 import com.example.data.entity.RouteLeg
 import com.example.data.entity.TrackEntity
 import com.example.data.entity.TrackPointEntity
 import com.example.data.entity.WaypointEntity
+import com.example.data.io.ImportedNavigationData
 import com.example.data.track.TrackFilter
 import com.example.geodesy.GeodesyEngine
 import kotlinx.coroutines.flow.Flow
@@ -23,6 +25,44 @@ class NavigationRepository(private val database: AppDatabase) {
 
     suspend fun addWaypoint(waypoint: WaypointEntity): Long {
         return waypointDao.insert(waypoint)
+    }
+
+    suspend fun addWaypointsBatch(waypoints: List<WaypointEntity>): List<Long> {
+        if (waypoints.isEmpty()) return emptyList()
+        return waypointDao.insertAll(waypoints)
+    }
+
+    suspend fun importNavigationDataBatch(data: ImportedNavigationData): Pair<Int, Int> = database.withTransaction {
+        var wpCount = 0
+        var rteCount = 0
+
+        if (data.waypoints.isNotEmpty()) {
+            val insertedIds = waypointDao.insertAll(data.waypoints)
+            wpCount = insertedIds.size
+        }
+
+        for ((name, pts) in data.routes) {
+            val entitiesToInsert = pts.mapIndexed { idx, p ->
+                WaypointEntity(
+                    name = "$name - T${idx + 1}",
+                    latitude = p.latitude,
+                    longitude = p.longitude,
+                    altitudeMeters = p.altitude
+                )
+            }
+            if (entitiesToInsert.isNotEmpty()) {
+                val newIds = waypointDao.insertAll(entitiesToInsert)
+                val savedEntities = entitiesToInsert.mapIndexed { idx, entity ->
+                    entity.copy(id = newIds[idx])
+                }
+                if (savedEntities.size >= 2) {
+                    createRouteFromWaypoints(name, savedEntities)
+                    rteCount++
+                }
+            }
+        }
+
+        Pair(wpCount, rteCount)
     }
 
     suspend fun updateWaypoint(waypoint: WaypointEntity) {

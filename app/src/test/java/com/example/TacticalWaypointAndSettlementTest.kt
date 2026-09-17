@@ -130,5 +130,47 @@ class TacticalWaypointAndSettlementTest {
         viewModel.toggleRuler()
         assertEquals(ActiveMapTool.NONE, viewModel.activeMapTool.value)
         assertFalse(viewModel.rulerState.value.isActive)
+
+        // 6. Mutual deactivation test: Ruler <-> Triangulation <-> Route Builder
+        viewModel.toggleRuler()
+        assertTrue(viewModel.rulerState.value.isActive)
+        assertEquals(ActiveMapTool.RULER, viewModel.activeMapTool.value)
+
+        viewModel.startTriangulation()
+        assertTrue("Triangulation must be active", viewModel.triangulationState.value.isActive)
+        assertFalse("Ruler must be deactivated by Triangulation", viewModel.rulerState.value.isActive)
+        assertNotEquals(ActiveMapTool.RULER, viewModel.activeMapTool.value)
+
+        viewModel.startRouteBuilder("Test Route")
+        assertTrue("Route builder must be active", viewModel.routeBuilderState.value.isActive)
+        assertFalse("Triangulation must be deactivated by Route Builder", viewModel.triangulationState.value.isActive)
+
+        viewModel.toggleRuler()
+        assertTrue("Ruler must be active", viewModel.rulerState.value.isActive)
+        assertFalse("Route builder must be deactivated by Ruler", viewModel.routeBuilderState.value.isActive)
+    }
+
+    @Test
+    fun testBatchNavigationDataImportInTransaction() = runBlocking {
+        val viewModel = MainViewModel(application)
+        val w1 = com.example.data.entity.WaypointEntity(id = 0L, name = "P1", latitude = 50.0, longitude = 30.0)
+        val w2 = com.example.data.entity.WaypointEntity(id = 0L, name = "P2", latitude = 50.1, longitude = 30.1)
+        val routePoints = listOf(GeoPoint(50.0, 30.0), GeoPoint(50.1, 30.1))
+
+        val importedData = com.example.data.io.ImportedNavigationData(
+            waypoints = listOf(w1, w2),
+            routes = listOf("Test Batch Route" to routePoints)
+        )
+
+        val result = viewModel.repository.importNavigationDataBatch(importedData)
+        assertEquals(2, result.first)
+        assertEquals(1, result.second)
+
+        val allWp = viewModel.repository.allWaypoints.first { it.isNotEmpty() }
+        assertTrue(allWp.any { it.name == "P1" })
+        assertTrue(allWp.any { it.name == "P2" })
+
+        val allRoutes = viewModel.repository.allRoutes.first { it.isNotEmpty() }
+        assertTrue(allRoutes.any { it.name == "Test Batch Route" })
     }
 }

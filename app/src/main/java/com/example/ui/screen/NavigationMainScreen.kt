@@ -63,7 +63,8 @@ fun NavigationMainScreen(
     val isFollowingLocation by viewModel.isFollowingLocation.collectAsStateWithLifecycle()
     val gpsLocation by viewModel.gpsLocation.collectAsStateWithLifecycle()
     val gpsStatus by viewModel.gpsStatus.collectAsStateWithLifecycle()
-    val orientationData by viewModel.orientationData.collectAsStateWithLifecycle()
+    val orientationDataState = viewModel.orientationData.collectAsStateWithLifecycle()
+    val orientationData by orientationDataState
     val pdrState by viewModel.pdrState.collectAsStateWithLifecycle()
     val activeTileSource by viewModel.activeTileSource.collectAsStateWithLifecycle()
     val availableTileSources by viewModel.availableTileSources.collectAsStateWithLifecycle()
@@ -100,7 +101,10 @@ fun NavigationMainScreen(
     // Best available position: a live fix when there is one, otherwise the step-counted
     // estimate, or manual position override. Bearings and distances to waypoints stay useful with GPS switched off,
     // which is exactly the situation this app exists for.
-    val effectiveLocation = gpsLocation ?: pdrState.lastEstimatedPosition ?: manualPositionOverride
+    val effectiveLocationState = remember(gpsLocation, pdrState.lastEstimatedPosition, manualPositionOverride) {
+        derivedStateOf { gpsLocation ?: pdrState.lastEstimatedPosition ?: manualPositionOverride }
+    }
+    val effectiveLocation = effectiveLocationState.value
     val blindDistanceMeters by viewModel.blindDistanceMeters.collectAsStateWithLifecycle()
     val selectedWaypoint by viewModel.selectedWaypoint.collectAsStateWithLifecycle()
     val candidatePoint by viewModel.candidatePoint.collectAsStateWithLifecycle()
@@ -272,8 +276,8 @@ fun NavigationMainScreen(
                 zoom = mapZoom,
                 onCenterChanged = { viewModel.setMapCenter(it) },
                 onZoomChanged = { viewModel.setMapZoom(it) },
-                userLocation = effectiveLocation,
-                orientationData = orientationData,
+                userLocation = effectiveLocationState,
+                orientationData = orientationDataState,
                 tileSource = activeTileSource,
                 tileManager = viewModel.tileManager,
                 waypoints = waypoints,

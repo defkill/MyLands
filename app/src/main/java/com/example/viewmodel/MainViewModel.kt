@@ -1042,6 +1042,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         } else {
             _candidatePoint.value = null
             _selectedWaypoint.value = null
+            // Mutually deactivate other active tools to prevent touch conflicts on map
+            if (_triangulationState.value.isActive) {
+                cancelTriangulation()
+            }
+            if (_routeBuilderState.value.isActive) {
+                cancelRouteBuilder()
+            }
             val start = gpsLocation.value ?: _mapCenter.value
             _rulerState.value = RulerState(isActive = true, startPoint = start, endPoint = start)
             _activeMapTool.value = ActiveMapTool.RULER
@@ -1152,6 +1159,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val triangulationState: StateFlow<TriangulationState> = _triangulationState.asStateFlow()
 
     fun startTriangulation() {
+        if (_rulerState.value.isActive) {
+            toggleRuler()
+        }
+        if (_routeBuilderState.value.isActive) {
+            cancelRouteBuilder()
+        }
         val current = _triangulationState.value
         _triangulationState.value = current.copy(isActive = true)
     }
@@ -1244,6 +1257,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // --- Navigation Tools: Route Builder by Points ---
     fun startRouteBuilder(initialName: String = "Маршрут") {
+        if (_rulerState.value.isActive) {
+            toggleRuler()
+        }
+        if (_triangulationState.value.isActive) {
+            cancelTriangulation()
+        }
         _routeBuilderState.value = RouteBuilderState(isActive = true, routeName = initialName)
     }
 
@@ -1375,32 +1394,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             com.example.data.io.GpxKmlService.importGpx(inputStream)
         }
 
-        var wpCount = 0
-        var rteCount = 0
-
-        for (wp in data.waypoints) {
-            repository.addWaypoint(wp)
-            wpCount++
-        }
-
-        for ((name, pts) in data.routes) {
-            val savedEntities = pts.mapIndexed { idx, p ->
-                val entity = WaypointEntity(
-                    name = "$name - T${idx + 1}",
-                    latitude = p.latitude,
-                    longitude = p.longitude,
-                    altitudeMeters = p.altitude
-                )
-                val id = repository.addWaypoint(entity)
-                entity.copy(id = id)
-            }
-            if (savedEntities.size >= 2) {
-                repository.createRouteFromWaypoints(name, savedEntities)
-                rteCount++
-            }
-        }
-
-        Pair(wpCount, rteCount)
+        repository.importNavigationDataBatch(data)
     }
 
     // --- Offline Pack (.orntpack) Packing ---
