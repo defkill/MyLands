@@ -5,6 +5,7 @@ import android.graphics.Paint as AndroidPaint
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
@@ -65,6 +66,9 @@ fun TacticalMapView(
     losTarget: GeoPoint? = null,
     activeTrackPoints: List<TrackPointEntity>,
     angleUnit: AngleUnit,
+    onCandidatePointDragStarted: ((GeoPoint) -> Unit)? = null,
+    onCandidatePointDragMoved: ((GeoPoint) -> Unit)? = null,
+    manualPosition: GeoPoint? = null,
     modifier: Modifier = Modifier
 ) {
     val coroutineScope = rememberCoroutineScope()
@@ -115,6 +119,9 @@ fun TacticalMapView(
     val onMapTappedState by rememberUpdatedState(onMapTapped)
     val onWaypointSelectedState by rememberUpdatedState(onWaypointSelected)
     val onRulerPointChangedState by rememberUpdatedState(onRulerPointChanged)
+    val onCandidatePointDragStartedState by rememberUpdatedState(onCandidatePointDragStarted)
+    val onCandidatePointDragMovedState by rememberUpdatedState(onCandidatePointDragMoved)
+    var isDraggingCandidatePoint by remember { mutableStateOf(false) }
 
     Canvas(
         modifier = modifier
@@ -213,8 +220,45 @@ fun TacticalMapView(
                 )
             }
             .pointerInput(isSelectingRegion) {
-                // Panning would fight the selection drag for the same gesture.
                 if (isSelectingRegion) return@pointerInput
+
+                detectDragGesturesAfterLongPress(
+                    onDragStart = { offset ->
+                        isDraggingCandidatePoint = true
+                        val geo = MapProjection.screenToGeo(
+                            screenX = offset.x,
+                            screenY = offset.y,
+                            centerLat = currentCenter.latitude,
+                            centerLon = currentCenter.longitude,
+                            zoom = currentZoom,
+                            screenWidth = size.width.toFloat(),
+                            screenHeight = size.height.toFloat()
+                        )
+                        onCandidatePointDragStartedState?.invoke(geo)
+                    },
+                    onDrag = { change, _ ->
+                        val geo = MapProjection.screenToGeo(
+                            screenX = change.position.x,
+                            screenY = change.position.y,
+                            centerLat = currentCenter.latitude,
+                            centerLon = currentCenter.longitude,
+                            zoom = currentZoom,
+                            screenWidth = size.width.toFloat(),
+                            screenHeight = size.height.toFloat()
+                        )
+                        onCandidatePointDragMovedState?.invoke(geo)
+                    },
+                    onDragEnd = {
+                        isDraggingCandidatePoint = false
+                    },
+                    onDragCancel = {
+                        isDraggingCandidatePoint = false
+                    }
+                )
+            }
+            .pointerInput(isSelectingRegion, isDraggingCandidatePoint) {
+                // Panning would fight the selection drag or candidate point drag.
+                if (isSelectingRegion || isDraggingCandidatePoint) return@pointerInput
 
                 detectTransformGestures { _, pan, gestureZoom, _ ->
                     if (gestureZoom != 1.0f) {
@@ -299,12 +343,13 @@ fun TacticalMapView(
         }
 
         // 7. Draw Waypoints
-        drawWaypoints(waypoints, selectedWaypoint, center, zoom, width, height, userLocation, angleUnit)
+        val effectiveUser = userLocation ?: manualPosition
+        drawWaypoints(waypoints, selectedWaypoint, center, zoom, width, height, effectiveUser, angleUnit)
 
         // 7b. Draw Candidate Point & Targeting Vector
         val activeTarget = candidatePoint ?: selectedWaypoint?.toGeoPoint()
-        if (activeTarget != null && userLocation != null) {
-            drawTargetBearingLine(userLocation, activeTarget, center, zoom, width, height)
+        if (activeTarget != null && effectiveUser != null) {
+            drawTargetBearingLine(effectiveUser, activeTarget, center, zoom, width, height)
         }
         if (candidatePoint != null) {
             drawCandidatePoint(candidatePoint, center, zoom, width, height)
@@ -313,6 +358,8 @@ fun TacticalMapView(
         // 8. Draw User Location Puck and Heading
         if (userLocation != null) {
             drawUserLocation(userLocation, orientationData, center, zoom, width, height)
+        } else if (manualPosition != null) {
+            drawManualUserLocation(manualPosition, orientationData, center, zoom, width, height)
         }
 
         // 9. Draw Center Crosshair
@@ -971,6 +1018,52 @@ private fun DrawScope.drawUserLocation(
     // Center puck
     drawCircle(Color.White, radius = 10f, center = Offset(sx, sy))
     drawCircle(Color(0xFF0288D1), radius = 7f, center = Offset(sx, sy))
+}
+
+private fun DrawScope.drawManualUserLocation(
+    manualLocation: GeoPoint,
+    orientationData: OrientationData,
+    center: GeoPoint,
+    zoom: Double,
+    width: Float,
+    height: Float
+) {
+    val (sx, sy) = MapProjection.geoToScreen(manualLocation, center.latitude, center.longitude, zoom, width, height)
+
+    // Dashed outer circle (amber)
+    drawCircle(
+        color = Color(0xFFFF9800),
+        radius = 24f,
+        center = Offset(sx, sy),
+        style = Stroke(2.5f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f), 0f))
+    )
+
+    // Directional Cone pointing in heading direction (amber tint)
+    val heading = orientationData.trueHeadingDeg
+    rotate(heading, pivot = Offset(sx, sy)) {
+        val conePath = Path().apply {
+            moveTo(sx, sy - 42f)
+            lineTo(sx - 18f, sy + 10f)
+            lineTo(sx, sy)
+            lineTo(sx + 18f, sy + 10f)
+            close()
+        }
+        drawPath(conePath, color = Color(0xFFFFB74D))
+    }
+
+    // Center puck: white outer circle, amber center
+    drawCircle(Color.White, radius = 10f, center = Offset(sx, sy))
+    drawCircle(Color(0xFFFF9800), radius = 7f, center = Offset(sx, sy))
+
+    // Distinct "ВРУЧНУЮ" text label
+    val paint = AndroidPaint().apply {
+        color = android.graphics.Color.rgb(255, 183, 77)
+        textSize = 24f
+        isAntiAlias = true
+        isFakeBoldText = true
+        setShadowLayer(6f, 0f, 0f, android.graphics.Color.BLACK)
+    }
+    drawContext.canvas.nativeCanvas.drawText("ВРУЧНУЮ", sx + 28f, sy + 8f, paint)
 }
 
 private fun DrawScope.drawCrosshair(width: Float, height: Float) {

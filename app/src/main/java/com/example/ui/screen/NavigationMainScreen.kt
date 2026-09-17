@@ -92,10 +92,13 @@ fun NavigationMainScreen(
     val routeProfile by viewModel.routeProfile.collectAsStateWithLifecycle()
     val isCalculatingProfile by viewModel.isCalculatingProfile.collectAsStateWithLifecycle()
 
+    val manualPositionOverride by viewModel.manualPositionOverride.collectAsStateWithLifecycle()
+    var isRouteBuilderMinimized by remember { mutableStateOf(false) }
+
     // Best available position: a live fix when there is one, otherwise the step-counted
-    // estimate. Bearings and distances to waypoints stay useful with GPS switched off,
+    // estimate, or manual position override. Bearings and distances to waypoints stay useful with GPS switched off,
     // which is exactly the situation this app exists for.
-    val effectiveLocation = gpsLocation ?: pdrState.lastEstimatedPosition
+    val effectiveLocation = gpsLocation ?: pdrState.lastEstimatedPosition ?: manualPositionOverride
     val blindDistanceMeters by viewModel.blindDistanceMeters.collectAsStateWithLifecycle()
     val selectedWaypoint by viewModel.selectedWaypoint.collectAsStateWithLifecycle()
     val candidatePoint by viewModel.candidatePoint.collectAsStateWithLifecycle()
@@ -303,7 +306,10 @@ fun NavigationMainScreen(
                 regionSelection = regionSelection,
                 onRegionSelected = { viewModel.setRegionSelection(it) },
                 activeTrackPoints = currentTrackPoints,
-                angleUnit = userPreferences.defaultAngleUnit
+                angleUnit = userPreferences.defaultAngleUnit,
+                onCandidatePointDragStarted = { viewModel.onCandidatePointDragStarted(it) },
+                onCandidatePointDragMoved = { viewModel.updateCandidatePointPosition(it) },
+                manualPosition = manualPositionOverride
             )
 
             // 2. Top Tactical Header Overlay
@@ -863,6 +869,12 @@ fun NavigationMainScreen(
                             val revStr = targetRuler.formatReverseAzimuth(userPreferences.defaultAngleUnit)
                             Toast.makeText(context, "Обратный азимут: $revStr", Toast.LENGTH_SHORT).show()
                         },
+                        onSetAsMyLocation = if (candidatePoint != null) {
+                            {
+                                viewModel.setManualPosition(candidatePoint!!)
+                                Toast.makeText(context, "Точка установлена как текущее местоположение", Toast.LENGTH_SHORT).show()
+                            }
+                        } else null,
                         onClose = {
                             if (candidatePoint != null) {
                                 viewModel.clearCandidatePoint()
@@ -913,7 +925,12 @@ fun NavigationMainScreen(
                             viewModel.deleteRoute(it)
                             Toast.makeText(context, "Маршрут удалён", Toast.LENGTH_SHORT).show()
                         },
-                        onCancel = { viewModel.cancelRouteBuilder() }
+                        onCancel = {
+                            isRouteBuilderMinimized = false
+                            viewModel.cancelRouteBuilder()
+                        },
+                        isMinimized = isRouteBuilderMinimized,
+                        onToggleMinimized = { isRouteBuilderMinimized = !isRouteBuilderMinimized }
                     )
                 }
 

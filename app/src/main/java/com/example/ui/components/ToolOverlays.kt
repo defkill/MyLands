@@ -33,7 +33,8 @@ fun RulerOverlay(
     title: String = "ЛИНЕЙКА (ДАЛЬНОСТЬ И АЗИМУТ)",
     icon: androidx.compose.ui.graphics.vector.ImageVector = Icons.Default.Straighten,
     iconTint: Color = Color(0xFFFFD54F),
-    onReverseAzimuthClick: (() -> Unit)? = null
+    onReverseAzimuthClick: (() -> Unit)? = null,
+    onSetAsMyLocation: (() -> Unit)? = null
 ) {
     Surface(
         modifier = modifier
@@ -51,7 +52,7 @@ fun RulerOverlay(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f, fill = false)) {
                     Icon(icon, contentDescription = null, tint = iconTint)
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
@@ -62,8 +63,30 @@ fun RulerOverlay(
                         maxLines = 1
                     )
                 }
-                IconButton(onClick = onClose, modifier = Modifier.size(24.dp)) {
-                    Icon(Icons.Default.Close, contentDescription = "Закрыть", tint = Color.Gray)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (onSetAsMyLocation != null) {
+                        Button(
+                            onClick = onSetAsMyLocation,
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF9800)),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            modifier = Modifier
+                                .height(28.dp)
+                                .padding(end = 6.dp)
+                                .testTag("set_my_location_btn")
+                        ) {
+                            Icon(
+                                Icons.Default.PersonPin,
+                                contentDescription = null,
+                                tint = Color.Black,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Я здесь", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    IconButton(onClick = onClose, modifier = Modifier.size(24.dp)) {
+                        Icon(Icons.Default.Close, contentDescription = "Закрыть", tint = Color.Gray)
+                    }
                 }
             }
 
@@ -135,7 +158,9 @@ fun RouteBuilderPanel(
     onShowProfile: (RouteEntity) -> Unit,
     onDeleteRoute: (RouteEntity) -> Unit,
     onCancel: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isMinimized: Boolean = false,
+    onToggleMinimized: () -> Unit = {}
 ) {
     Surface(
         modifier = modifier
@@ -145,24 +170,60 @@ fun RouteBuilderPanel(
         shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
         tonalElevation = 8.dp
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+        if (isMinimized) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onToggleMinimized() }
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
-                    Text("ПОСТРОЕНИЕ МАРШРУТА ПО ТОЧКАМ", fontWeight = FontWeight.Bold, color = Color(0xFF00E5FF), fontSize = 14.sp)
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f, fill = false)) {
+                    Icon(
+                        Icons.Default.KeyboardArrowUp,
+                        contentDescription = "Развернуть панель маршрута",
+                        tint = Color(0xFF00E5FF),
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Выбрано точек: ${routeState.selectedWaypoints.size} | Длина: ${routeState.formatTotalDistance()}",
-                        color = Color(0xFFB0BEC5),
-                        fontSize = 12.sp
+                        text = "ПОСТРОЕНИЕ МАРШРУТА · ${routeState.selectedWaypoints.size} точек · ${routeState.formatTotalDistance()}",
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF00E5FF),
+                        fontSize = 13.sp,
+                        maxLines = 1
                     )
                 }
-                IconButton(onClick = onCancel) {
+                IconButton(onClick = onCancel, modifier = Modifier.size(24.dp)) {
                     Icon(Icons.Default.Close, contentDescription = "Отмена", tint = Color.Gray)
                 }
             }
+        } else {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f, fill = false)) {
+                        Text("ПОСТРОЕНИЕ МАРШРУТА ПО ТОЧКАМ", fontWeight = FontWeight.Bold, color = Color(0xFF00E5FF), fontSize = 14.sp)
+                        Text(
+                            text = "Выбрано точек: ${routeState.selectedWaypoints.size} | Длина: ${routeState.formatTotalDistance()}",
+                            color = Color(0xFFB0BEC5),
+                            fontSize = 12.sp
+                        )
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = onToggleMinimized, modifier = Modifier.size(28.dp)) {
+                            Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Свернуть", tint = Color(0xFF00E5FF))
+                        }
+                        Spacer(modifier = Modifier.width(4.dp))
+                        IconButton(onClick = onCancel, modifier = Modifier.size(28.dp)) {
+                            Icon(Icons.Default.Close, contentDescription = "Отмена", tint = Color.Gray)
+                        }
+                    }
+                }
 
             Spacer(modifier = Modifier.height(10.dp))
 
@@ -352,6 +413,7 @@ fun RouteBuilderPanel(
             }
         }
     }
+}
 }
 
 @Composable

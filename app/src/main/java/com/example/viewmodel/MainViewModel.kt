@@ -124,6 +124,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _candidatePoint = MutableStateFlow<GeoPoint?>(null)
     val candidatePoint: StateFlow<GeoPoint?> = _candidatePoint.asStateFlow()
 
+    // Manual Position Override (user pin when GPS is off/spoofed)
+    private val _manualPositionOverride = MutableStateFlow<GeoPoint?>(null)
+    val manualPositionOverride: StateFlow<GeoPoint?> = _manualPositionOverride.asStateFlow()
+
     // Active Tools
     private val _rulerState = MutableStateFlow(RulerState())
     val rulerState: StateFlow<RulerState> = _rulerState.asStateFlow()
@@ -202,6 +206,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             gpsLocation.collect { loc ->
                 if (loc != null) {
+                    if (_manualPositionOverride.value != null) {
+                        _manualPositionOverride.value = null
+                    }
                     orientationManager.updateGeomagneticDeclination(loc.latitude, loc.longitude, loc.altitude ?: 0.0)
 
                     // Only anchor on fixes that pass a sanity check: good reported accuracy and
@@ -486,8 +493,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             locationTracker.syncProviders()
         }
 
-        if (next && gpsLocation.value != null) {
-            _mapCenter.value = gpsLocation.value!!
+        if (next) {
+            val target = gpsLocation.value ?: _manualPositionOverride.value
+            if (target != null) {
+                _mapCenter.value = target
+            }
         }
     }
 
@@ -943,6 +953,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun setManualPosition(point: GeoPoint) {
+        _manualPositionOverride.value = point
+        stepDetectorManager.updateGpsAnchor(
+            point,
+            System.currentTimeMillis(),
+            orientationManager.orientationData.value.trueHeadingDeg
+        )
+        stepDetectorManager.setDeadReckoningActive(true)
+        clearCandidatePoint()
+    }
+
+    fun clearManualPosition() {
+        _manualPositionOverride.value = null
+    }
+
     fun clearSelectedWaypoint() {
         _selectedWaypoint.value = null
     }
@@ -950,6 +975,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * Map tap router respecting active tool hierarchy:
      * - If RULER is active, taps go to its handler.
+     * - If ROUTE BUILDER is active, taps on empty map do not create candidate points.
      * - When active tool is NONE or PLACE_WAYPOINT_PENDING, tapping on empty map places/moves
      *   a temporary candidate marker (without Room write) and sets state to PLACE_WAYPOINT_PENDING.
      */
@@ -957,10 +983,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (_rulerState.value.isActive || _activeMapTool.value == ActiveMapTool.RULER) {
             return
         }
+        if (_routeBuilderState.value.isActive) {
+            return
+        }
 
         _candidatePoint.value = tappedGeo
         _selectedWaypoint.value = null
         _activeMapTool.value = ActiveMapTool.PLACE_WAYPOINT_PENDING
+    }
+
+    fun onCandidatePointDragStarted(geo: GeoPoint) {
+        if (_rulerState.value.isActive || _activeMapTool.value == ActiveMapTool.RULER) {
+            return
+        }
+        if (_routeBuilderState.value.isActive) {
+            return
+        }
+
+        _candidatePoint.value = geo
+        _selectedWaypoint.value = null
+        _activeMapTool.value = ActiveMapTool.PLACE_WAYPOINT_PENDING
+    }
+
+    fun updateCandidatePointPosition(geo: GeoPoint) {
+        if (_candidatePoint.value != null) {
+            _candidatePoint.value = geo
+        }
     }
 
     fun saveCandidatePoint(
