@@ -983,9 +983,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (_rulerState.value.isActive || _activeMapTool.value == ActiveMapTool.RULER) {
             return
         }
-        if (_routeBuilderState.value.isActive) {
-            return
-        }
 
         _candidatePoint.value = tappedGeo
         _selectedWaypoint.value = null
@@ -994,9 +991,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun onCandidatePointDragStarted(geo: GeoPoint) {
         if (_rulerState.value.isActive || _activeMapTool.value == ActiveMapTool.RULER) {
-            return
-        }
-        if (_routeBuilderState.value.isActive) {
             return
         }
 

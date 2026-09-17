@@ -27,6 +27,7 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -279,21 +280,24 @@ fun CompassFullScreenDialog(
                             }
                         }
                     }
-                }
 
-                Text(
-                    text = when {
-                        position == null -> "Ожидание местоположения…"
-                        isEstimated -> "Без GPS: пройдено по счислению ${"%.0f".format(blindDistanceMeters)} м · " +
-                            "погрешность растёт примерно на 5-10% пути"
-                        else -> "Магнитное склонение: ${"%+.1f".format(orientationData.magneticDeclinationDeg)}°"
-                    },
-                    color = if (isEstimated) Color(0xFFFFB74D) else Color(0xFF607D8B),
-                    fontSize = 12.sp,
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(bottom = 36.dp)
-                )
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    Text(
+                        text = when {
+                            position == null -> "Ожидание местоположения…"
+                            isEstimated -> "Без GPS: пройдено по счислению ${"%.0f".format(blindDistanceMeters)} м · " +
+                                "погрешность растёт примерно на 5-10% пути"
+                            else -> "Магнитное склонение: ${"%+.1f".format(orientationData.magneticDeclinationDeg)}°"
+                        },
+                        color = if (isEstimated) Color(0xFFFFB74D) else Color(0xFF607D8B),
+                        fontSize = 12.sp,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier
+                            .padding(horizontal = 24.dp)
+                            .testTag("compass_declination_text")
+                    )
+                }
             }
         }
     }
