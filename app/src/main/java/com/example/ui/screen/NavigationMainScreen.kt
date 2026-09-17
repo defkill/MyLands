@@ -50,8 +50,6 @@ import com.example.viewmodel.MainViewModel
 import java.io.File
 import java.io.FileOutputStream
 
-private val COMPACT_COORD_BAR_HEIGHT = 76.dp
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NavigationMainScreen(
@@ -952,7 +950,7 @@ fun NavigationMainScreen(
             val showTriangulationBadge = triangulationState.rays.isNotEmpty() && !showTriangulationDialog
             if (showMinimizedRoute || showTriangulationBadge) {
                 val density = LocalDensity.current
-                val dynamicBottomPadding = with(density) { extraContentHeightPx.toDp() } + COMPACT_COORD_BAR_HEIGHT + 8.dp
+                val dynamicBottomPadding = with(density) { extraContentHeightPx.toDp() } + 12.dp
                 Column(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
