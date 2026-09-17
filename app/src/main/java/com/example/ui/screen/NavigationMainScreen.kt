@@ -290,8 +290,13 @@ fun NavigationMainScreen(
                 candidatePoint = candidatePoint,
                 activeMapTool = activeMapTool,
                 onMapTapped = { pt ->
-                    if (isPickingLosTarget) viewModel.pickLosTarget(pt)
-                    else viewModel.onMapTapped(pt)
+                    if (routeBuilderState.isActive && !isRouteBuilderMinimized) {
+                        isRouteBuilderMinimized = true
+                    } else if (isPickingLosTarget) {
+                        viewModel.pickLosTarget(pt)
+                    } else {
+                        viewModel.onMapTapped(pt)
+                    }
                 },
                 rulerState = rulerState,
                 onRulerPointChanged = { p1, p2 -> viewModel.updateRulerPoints(p1, p2) },
@@ -724,39 +729,84 @@ fun NavigationMainScreen(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // Center on GPS / Follow Location
+                // Center on GPS / Follow Location or Reset Manual Position
+                if (manualPositionOverride != null) {
+                    Surface(
+                        onClick = {
+                            viewModel.clearManualPosition()
+                            Toast.makeText(context, "Ручное местоположение сброшено", Toast.LENGTH_SHORT).show()
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color(0xFFFF9800),
+                        shadowElevation = 4.dp,
+                        modifier = Modifier.testTag("clear_manual_pos_badge")
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                        ) {
+                            Icon(Icons.Default.Close, contentDescription = null, tint = Color.Black, modifier = Modifier.size(12.dp))
+                            Spacer(modifier = Modifier.width(2.dp))
+                            Text("СБРОС", color = Color.Black, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+
                 FloatingActionButton(
                     onClick = {
-                        val hasPermission = androidx.core.content.ContextCompat.checkSelfPermission(
-                            context, android.Manifest.permission.ACCESS_FINE_LOCATION
-                        ) == android.content.pm.PackageManager.PERMISSION_GRANTED ||
-                            androidx.core.content.ContextCompat.checkSelfPermission(
-                                context, android.Manifest.permission.ACCESS_COARSE_LOCATION
-                            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-
-                        if (!hasPermission) {
-                            locationPermissionLauncher.launch(
-                                arrayOf(
-                                    android.Manifest.permission.ACCESS_FINE_LOCATION,
-                                    android.Manifest.permission.ACCESS_COARSE_LOCATION
-                                )
-                            )
+                        if (manualPositionOverride != null) {
+                            viewModel.clearManualPosition()
+                            Toast.makeText(context, "Ручное местоположение сброшено", Toast.LENGTH_SHORT).show()
                         } else {
-                            viewModel.toggleFollowLocation()
-                            if (gpsLocation == null) {
-                                Toast.makeText(
-                                    context,
-                                    "Поиск спутников… под открытым небом это занимает до минуты",
-                                    Toast.LENGTH_SHORT
-                                ).show()
+                            val hasPermission = androidx.core.content.ContextCompat.checkSelfPermission(
+                                context, android.Manifest.permission.ACCESS_FINE_LOCATION
+                            ) == android.content.pm.PackageManager.PERMISSION_GRANTED ||
+                                androidx.core.content.ContextCompat.checkSelfPermission(
+                                    context, android.Manifest.permission.ACCESS_COARSE_LOCATION
+                                ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+                            if (!hasPermission) {
+                                locationPermissionLauncher.launch(
+                                    arrayOf(
+                                        android.Manifest.permission.ACCESS_FINE_LOCATION,
+                                        android.Manifest.permission.ACCESS_COARSE_LOCATION
+                                    )
+                                )
+                            } else {
+                                viewModel.toggleFollowLocation()
+                                if (gpsLocation == null) {
+                                    Toast.makeText(
+                                        context,
+                                        "Поиск спутников… под открытым небом это занимает до минуты",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
                             }
                         }
                     },
                     modifier = Modifier.size(48.dp).testTag("gps_follow_button"),
-                    containerColor = if (isFollowingLocation) Color(0xFF2E7D32) else Color(0xFF263238),
-                    contentColor = Color.White
+                    containerColor = if (manualPositionOverride != null) {
+                        Color(0xFFFF9800)
+                    } else if (isFollowingLocation) {
+                        Color(0xFF2E7D32)
+                    } else {
+                        Color(0xFF263238)
+                    },
+                    contentColor = if (manualPositionOverride != null) Color.Black else Color.White
                 ) {
-                    Icon(Icons.Default.MyLocation, contentDescription = "Мое местоположение", modifier = Modifier.size(22.dp))
+                    if (manualPositionOverride != null) {
+                        Icon(
+                            Icons.Default.LocationOff,
+                            contentDescription = "Сбросить ручное местоположение",
+                            modifier = Modifier.size(22.dp)
+                        )
+                    } else {
+                        Icon(
+                            Icons.Default.MyLocation,
+                            contentDescription = "Мое местоположение",
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
                 }
 
                 // Add Waypoint
