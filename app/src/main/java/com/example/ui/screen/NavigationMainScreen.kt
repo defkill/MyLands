@@ -50,7 +50,7 @@ import com.example.viewmodel.MainViewModel
 import java.io.File
 import java.io.FileOutputStream
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun NavigationMainScreen(
     viewModel: MainViewModel,
@@ -951,11 +951,11 @@ fun NavigationMainScreen(
             if (showMinimizedRoute || showTriangulationBadge) {
                 val density = LocalDensity.current
                 val dynamicBottomPadding = with(density) { extraContentHeightPx.toDp() } + 12.dp
-                Column(
+                FlowRow(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
                         .padding(end = 12.dp, bottom = dynamicBottomPadding),
-                    horizontalAlignment = Alignment.End,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, alignment = Alignment.End),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     // Minimized Route Builder Badge
