@@ -66,6 +66,7 @@ class ElevationEngine(private val context: Context) {
         val raf: RandomAccessFile
     )
 
+    private val tileLock = Any()
     private val openTiles = LinkedHashMap<String, Tile>()
 
     /** Tile names present on disk. */
@@ -103,9 +104,9 @@ class ElevationEngine(private val context: Context) {
         return needed.toList() to needed.filter { !have.contains(it) }
     }
 
-    private fun openTile(name: String): Tile? {
+    private fun openTile(name: String): Tile? = synchronized(tileLock) {
         val cleanName = name.uppercase().removeSuffix(".HGT")
-        openTiles[cleanName]?.let { return it }
+        openTiles[cleanName]?.let { return@synchronized it }
 
         // Find file case-insensitively on disk
         val candidateFiles = listOf(
@@ -120,17 +121,17 @@ class ElevationEngine(private val context: Context) {
             }
         } ?: run {
             Log.w(TAG, "Tile file not found for $cleanName in ${elevationDir.absolutePath}")
-            return null
+            return@synchronized null
         }
 
-        return try {
+        return@synchronized try {
             val len = file.length()
             val size = when {
                 len >= SIZE_SRTM1.toLong() * SIZE_SRTM1 * 2 -> SIZE_SRTM1
                 len >= SIZE_SRTM3.toLong() * SIZE_SRTM3 * 2 -> SIZE_SRTM3
                 else -> {
                     Log.w(TAG, "$cleanName: unexpected size $len bytes")
-                    return null
+                    return@synchronized null
                 }
             }
 
@@ -168,7 +169,7 @@ class ElevationEngine(private val context: Context) {
      *
      * @return metres, or null when no tile covers the point or the data there is void.
      */
-    fun getElevation(lat: Double, lon: Double): Double? {
+    fun getElevation(lat: Double, lon: Double): Double? = synchronized(tileLock) {
         val tile = openTile(tileNameFor(lat, lon)) ?: return null
         val n = tile.size - 1
 
@@ -208,7 +209,7 @@ class ElevationEngine(private val context: Context) {
     suspend fun getElevationAsync(lat: Double, lon: Double): Double? =
         withContext(Dispatchers.IO) { getElevation(lat, lon) }
 
-    fun close() {
+    fun close() = synchronized(tileLock) {
         openTiles.values.forEach { runCatching { it.raf.close() } }
         openTiles.clear()
     }

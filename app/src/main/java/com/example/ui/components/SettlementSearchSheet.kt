@@ -22,9 +22,11 @@ import com.example.data.settlement.Settlement
 import com.example.data.settlement.SettlementRepository
 import com.example.geodesy.GeodesyEngine
 import com.example.model.GeoPoint
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.debounce
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, FlowPreview::class)
 @Composable
 fun SettlementSearchSheet(
     repository: SettlementRepository,
@@ -33,7 +35,6 @@ fun SettlementSearchSheet(
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val coroutineScope = rememberCoroutineScope()
     var searchQuery by remember { mutableStateOf("") }
     var selectedOblast by remember { mutableStateOf<String?>(null) }
     var results by remember { mutableStateOf<List<Settlement>>(emptyList()) }
@@ -42,17 +43,18 @@ fun SettlementSearchSheet(
 
     // Load initial list and oblasts
     LaunchedEffect(Unit) {
-        isLoading = true
         availableOblasts = repository.getOblasts()
-        results = repository.search("", limit = 50)
-        isLoading = false
     }
 
-    // Reactively search on query or oblast changes
-    LaunchedEffect(searchQuery, selectedOblast) {
-        coroutineScope.launch {
-            results = repository.search(searchQuery, selectedOblast, limit = 80)
-        }
+    // Reactively search on query or oblast changes with debounce and cancellation
+    LaunchedEffect(Unit) {
+        snapshotFlow { searchQuery to selectedOblast }
+            .debounce(200L)
+            .collectLatest { (query, oblast) ->
+                isLoading = true
+                results = repository.search(query, oblast, limit = if (query.isBlank() && oblast == null) 50 else 80)
+                isLoading = false
+            }
     }
 
     ModalBottomSheet(

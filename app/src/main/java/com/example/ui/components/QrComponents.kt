@@ -27,7 +27,6 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -37,6 +36,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.data.qr.QrPayload
 import com.example.geodesy.GeodesyEngine
 import com.example.model.CoordinateSystem
@@ -200,6 +200,19 @@ fun QrScannerDialog(
     // Guard so one code is not reported dozens of times while it stays in frame.
     var alreadyHandled by remember { mutableStateOf(false) }
 
+    val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
+    var activeCameraProvider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            try {
+                activeCameraProvider?.unbindAll()
+            } catch (_: Exception) {
+            }
+            cameraExecutor.shutdown()
+        }
+    }
+
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
             Box(modifier = Modifier.fillMaxSize()) {
@@ -209,12 +222,12 @@ fun QrScannerDialog(
                         modifier = Modifier.fillMaxSize().testTag("qr_scanner_preview"),
                         factory = { ctx ->
                             val previewView = PreviewView(ctx)
-                            val executor = Executors.newSingleThreadExecutor()
                             val providerFuture = ProcessCameraProvider.getInstance(ctx)
 
                             providerFuture.addListener({
                                 try {
                                     val provider = providerFuture.get()
+                                    activeCameraProvider = provider
 
                                     val preview = androidx.camera.core.Preview.Builder().build()
                                         .also { it.surfaceProvider = previewView.surfaceProvider }
@@ -223,7 +236,7 @@ fun QrScannerDialog(
                                         .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                                         .build()
 
-                                    analysis.setAnalyzer(executor) { image ->
+                                    analysis.setAnalyzer(cameraExecutor) { image ->
                                         if (!alreadyHandled) {
                                             decodeFrame(image)?.let { decoded ->
                                                 alreadyHandled = true
