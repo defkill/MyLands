@@ -98,6 +98,15 @@ class TrackingService : Service() {
     private lateinit var orientationManager: OrientationManager
     private lateinit var stepDetectorManager: StepDetectorManager
 
+    @androidx.annotation.VisibleForTesting
+    internal val testLocationTracker: LocationTracker get() = locationTracker
+
+    @androidx.annotation.VisibleForTesting
+    internal val testOrientationManager: OrientationManager get() = orientationManager
+
+    @androidx.annotation.VisibleForTesting
+    internal val testStepDetectorManager: StepDetectorManager get() = stepDetectorManager
+
     private var wakeLock: PowerManager.WakeLock? = null
     private val wakeLockLock = Any()
     private var currentTrackId: Long = 0L
