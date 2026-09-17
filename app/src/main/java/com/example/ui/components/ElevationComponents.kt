@@ -5,6 +5,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -472,26 +474,52 @@ fun VisibilityCheckOverlay(
     onClose: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    var isCollapsed by remember { mutableStateOf(false) }
+
     Surface(
         modifier = modifier.fillMaxWidth().testTag("visibility_overlay"),
         color = Color(0xEE10151C),
         shape = RoundedCornerShape(12.dp),
         tonalElevation = 8.dp
     ) {
-        Column(modifier = Modifier.padding(14.dp)) {
+        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "ПРЯМАЯ ВИДИМОСТЬ",
-                    color = Color(0xFF80DEEA),
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = "ПРЯМАЯ ВИДИМОСТЬ",
+                        color = Color(0xFF80DEEA),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    if (isCollapsed && result != null) {
+                        Text(
+                            text = if (result.isVisible) "✓ ОТКРЫТА" else "✕ ЗАКРЫТА",
+                            color = if (result.isVisible) Color(0xFF69F0AE) else Color(0xFFEF5350),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(
+                        onClick = { isCollapsed = !isCollapsed },
+                        modifier = Modifier.size(28.dp).testTag("toggle_los_collapse_button")
+                    ) {
+                        Icon(
+                            if (isCollapsed) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
+                            contentDescription = if (isCollapsed) "Развернуть" else "Свернуть",
+                            tint = Color(0xFF80DEEA),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
                     TextButton(onClick = onOpenSettings) {
                         Text("Параметры", color = Color(0xFF90CAF9), fontSize = 12.sp)
                     }
@@ -501,116 +529,118 @@ fun VisibilityCheckOverlay(
                 }
             }
 
-            Spacer(modifier = Modifier.height(6.dp))
+            if (!isCollapsed) {
+                Spacer(modifier = Modifier.height(6.dp))
 
-            when {
-                isPickingTarget -> Text(
-                    "Выберите цель: нажмите точку на карте или сохранённую точку",
-                    color = Color(0xFFFFB74D),
-                    fontSize = 13.sp
-                )
-
-                isCalculating -> Text("Расчёт по рельефу…", color = Color(0xFFB0BEC5), fontSize = 13.sp)
-
-                // Target chosen but nothing came back: the area has no elevation tile. Say so
-                // plainly and offer the fix, instead of leaving the user with an empty panel.
-                result == null && hasTarget -> Column {
-                    Text(
-                        "НЕТ ФАЙЛОВ РЕЛЬЕФА (.HGT)",
-                        color = Color(0xFFEF5350),
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold
+                when {
+                    isPickingTarget -> Text(
+                        "Выберите цель: нажмите точку на карте или сохранённую точку",
+                        color = Color(0xFFFFB74D),
+                        fontSize = 13.sp
                     )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        "Для расчёта линии видимости импортируйте файл высот для этой зоны " +
-                            "(например, N50E036.hgt) через меню «Файлы».",
-                        color = Color(0xFFB0BEC5),
-                        fontSize = 12.sp
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Button(
-                        onClick = onImportElevation,
-                        modifier = Modifier.fillMaxWidth().testTag("import_elevation_from_los_button"),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00897B))
-                    ) {
-                        Text("Импортировать рельеф", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+
+                    isCalculating -> Text("Расчёт по рельефу…", color = Color(0xFFB0BEC5), fontSize = 13.sp)
+
+                    // Target chosen but nothing came back: the area has no elevation tile. Say so
+                    // plainly and offer the fix, instead of leaving the user with an empty panel.
+                    result == null && hasTarget -> Column {
+                        Text(
+                            "НЕТ ФАЙЛОВ РЕЛЬЕФА (.HGT)",
+                            color = Color(0xFFEF5350),
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            "Для расчёта линии видимости импортируйте файл высот для этой зоны " +
+                                "(например, N50E036.hgt) через меню «Файлы».",
+                            color = Color(0xFFB0BEC5),
+                            fontSize = 12.sp
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Button(
+                            onClick = onImportElevation,
+                            modifier = Modifier.fillMaxWidth().testTag("import_elevation_from_los_button"),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00897B))
+                        ) {
+                            Text("Импортировать рельеф", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            "Линия визирования на карте показана жёлтым — азимут и дистанцию " +
+                                "видно и без данных рельефа.",
+                            color = Color(0xFF78909C),
+                            fontSize = 10.sp
+                        )
                     }
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        "Линия визирования на карте показана жёлтым — азимут и дистанцию " +
-                            "видно и без данных рельефа.",
-                        color = Color(0xFF78909C),
-                        fontSize = 10.sp
-                    )
-                }
 
-                result == null -> Text(
-                    "Выберите цель, чтобы рассчитать видимость.",
-                    color = Color(0xFFB0BEC5),
-                    fontSize = 13.sp
-                )
-
-                else -> {
-                    Text(
-                        text = if (result.isVisible) "✓ ПРЯМАЯ ВИДИМОСТЬ ОТКРЫТА"
-                        else "✕ ГОРИЗОНТ ЗАКРЫТ ПРЕПЯТСТВИЕМ",
-                        color = if (result.isVisible) Color(0xFF69F0AE) else Color(0xFFEF5350),
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = String.format(
-                            Locale.US,
-                            "Дистанция %.2f км",
-                            result.totalDistanceMeters / 1000.0
-                        ),
+                    result == null -> Text(
+                        "Выберите цель, чтобы рассчитать видимость.",
                         color = Color(0xFFB0BEC5),
-                        fontSize = 12.sp,
-                        fontFamily = FontFamily.Monospace
+                        fontSize = 13.sp
                     )
 
-                    result.worstObstacle?.let { o ->
+                    else -> {
+                        Text(
+                            text = if (result.isVisible) "✓ ПРЯМАЯ ВИДИМОСТЬ ОТКРЫТА"
+                            else "✕ ГОРИЗОНТ ЗАКРЫТ ПРЕПЯТСТВИЕМ",
+                            color = if (result.isVisible) Color(0xFF69F0AE) else Color(0xFFEF5350),
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
                             text = String.format(
                                 Locale.US,
-                                "Препятствие на удалении %.2f км • Высота пика: %.0f м (выше луча на %.0f м)",
-                                o.distanceMeters / 1000.0,
-                                o.terrainMeters,
-                                o.obstructionMeters
+                                "Дистанция %.2f км",
+                                result.totalDistanceMeters / 1000.0
                             ),
-                            color = Color(0xFFFFB74D),
-                            fontSize = 12.sp
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = String.format(
-                                Locale.US,
-                                "Подняться на %.0f м, чтобы открылось",
-                                result.requiredExtraHeightMeters
-                            ),
-                            color = Color(0xFF81C784),
-                            fontSize = 12.sp
+                            color = Color(0xFFB0BEC5),
+                            fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace
                         )
 
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Button(
-                            onClick = onCreateObstacleWaypoint,
-                            modifier = Modifier.fillMaxWidth().testTag("create_obstacle_waypoint_button"),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE64A19))
-                        ) {
-                            Text("ПОСТАВИТЬ ТОЧКУ НА ПРЕПЯТСТВИИ", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        result.worstObstacle?.let { o ->
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = String.format(
+                                    Locale.US,
+                                    "Препятствие на удалении %.2f км • Высота пика: %.0f м (выше луча на %.0f м)",
+                                    o.distanceMeters / 1000.0,
+                                    o.terrainMeters,
+                                    o.obstructionMeters
+                                ),
+                                color = Color(0xFFFFB74D),
+                                fontSize = 12.sp
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = String.format(
+                                    Locale.US,
+                                    "Подняться на %.0f м, чтобы открылось",
+                                    result.requiredExtraHeightMeters
+                                ),
+                                color = Color(0xFF81C784),
+                                fontSize = 12.sp
+                            )
+
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Button(
+                                onClick = onCreateObstacleWaypoint,
+                                modifier = Modifier.fillMaxWidth().testTag("create_obstacle_waypoint_button"),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE64A19))
+                            ) {
+                                Text("ПОСТАВИТЬ ТОЧКУ НА ПРЕПЯТСТВИИ", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            }
                         }
-                    }
 
-                    Spacer(modifier = Modifier.height(6.dp))
-                    LineOfSightChart(
-                        result = result,
-                        modifier = Modifier.fillMaxWidth().height(110.dp)
-                    )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        LineOfSightChart(
+                            result = result,
+                            modifier = Modifier.fillMaxWidth().height(110.dp)
+                        )
+                    }
                 }
             }
         }

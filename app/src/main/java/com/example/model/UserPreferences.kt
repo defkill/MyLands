@@ -12,5 +12,8 @@ data class UserPreferences(
     val pdrStepLengthMeters: Float = 0.75f,
     val showMilitaryGrid: Boolean = true,
     val showMagneticDeclination: Boolean = true,
-    val mapTileSourceId: String = "osm_standard"
+    val mapTileSourceId: String = "osm_standard",
+    val lastMapLat: Double? = null,
+    val lastMapLon: Double? = null,
+    val lastMapZoom: Double? = null
 )

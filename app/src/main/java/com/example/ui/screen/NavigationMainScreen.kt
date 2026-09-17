@@ -8,8 +8,10 @@ import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -103,6 +105,8 @@ fun NavigationMainScreen(
     val isCoordinateModalOpen by viewModel.isCoordinateModalOpen.collectAsStateWithLifecycle()
 
     var showAddWaypointDialog by remember { mutableStateOf(false) }
+    var isCoordinateBarCompact by remember { mutableStateOf(true) }
+    var showMiniCompassHud by remember { mutableStateOf(false) }
     var showCompassScreen by remember { mutableStateOf(false) }
     var showTriangulationDialog by remember { mutableStateOf(false) }
     var showTracksSheet by remember { mutableStateOf(false) }
@@ -285,7 +289,7 @@ fun NavigationMainScreen(
             ) {
                 // Compass Rose & Heading Pill
                 Surface(
-                    onClick = { showCompassScreen = true },
+                    onClick = { showMiniCompassHud = !showMiniCompassHud },
                     color = Color(0xDD161C24),
                     shape = RoundedCornerShape(20.dp),
                     tonalElevation = 4.dp,
@@ -561,6 +565,91 @@ fun NavigationMainScreen(
                 }
             }
 
+            // 2a. Mini Compass HUD Widget (top right under buttons bar)
+            if (showMiniCompassHud) {
+                MiniCompassHudWidget(
+                    orientationData = orientationData,
+                    angleUnit = userPreferences.defaultAngleUnit,
+                    onExpand = {
+                        showCompassScreen = true
+                    },
+                    onClose = {
+                        showMiniCompassHud = false
+                    },
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 58.dp, end = 12.dp)
+                )
+            }
+
+            // 2c. Active Triangulation Floating Badge (when rays exist)
+            if (triangulationState.rays.isNotEmpty() && !showTriangulationDialog) {
+                Surface(
+                    color = Color(0xDD1E2630),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, Color(0xFFFF7043).copy(alpha = 0.6f)),
+                    tonalElevation = 6.dp,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(start = 12.dp, top = 56.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(
+                            onClick = { showTriangulationDialog = true },
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.ChangeHistory,
+                                contentDescription = "Открыть триангуляцию",
+                                tint = Color(0xFFFF7043),
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                        Text(
+                            text = "Лучи: ${triangulationState.rays.size}",
+                            color = Color.White,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.clickable { showTriangulationDialog = true }
+                        )
+                        val intersectionPt = triangulationState.intersectionPoint()
+                        if (intersectionPt != null) {
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Button(
+                                onClick = {
+                                    viewModel.saveTriangulationPoint("Цель ${waypoints.size + 1}")
+                                    Toast.makeText(context, "Точка цели сохранена!", Toast.LENGTH_SHORT).show()
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.height(26.dp)
+                            ) {
+                                Text("+ Точка цели", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(4.dp))
+                        IconButton(
+                            onClick = {
+                                viewModel.cancelTriangulation()
+                                Toast.makeText(context, "Триангуляция очищена", Toast.LENGTH_SHORT).show()
+                            },
+                            modifier = Modifier.size(24.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Close,
+                                contentDescription = "Очистить триангуляцию",
+                                tint = Color(0xFFEF9A9A),
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
             // 2b. Top-Left Zoom Controls
             Column(
                 modifier = Modifier
@@ -703,13 +792,14 @@ fun NavigationMainScreen(
                     .fillMaxWidth()
             ) {
                 // Active Ruler Overlay or Selected Target (Candidate / Waypoint) Overlay
+                val isAnyLosActive = isLosActive || isPickingLosTarget || losResult != null
                 if (rulerState.isActive) {
                     RulerOverlay(
                         rulerState = rulerState,
                         angleUnit = userPreferences.defaultAngleUnit,
                         onClose = { viewModel.toggleRuler() }
                     )
-                } else if (candidatePoint != null || selectedWaypoint != null) {
+                } else if (!isAnyLosActive && (candidatePoint != null || selectedWaypoint != null)) {
                     val targetPt: GeoPoint = candidatePoint ?: selectedWaypoint!!.toGeoPoint()
                     val userPt: GeoPoint = gpsLocation ?: mapCenter
                     val targetRuler = remember(userPt, targetPt) {
@@ -804,6 +894,8 @@ fun NavigationMainScreen(
                     gpsStatus = gpsStatus,
                     pdrState = pdrState,
                     terrainElevation = terrainElevation,
+                    isCompact = isCoordinateBarCompact,
+                    onToggleCompact = { isCoordinateBarCompact = !isCoordinateBarCompact },
                     onClick = { viewModel.openCoordinateModal() }
                 )
             }
@@ -963,6 +1055,10 @@ fun NavigationMainScreen(
             preselected = selectedWaypoint,
             onAddRay = { wp, az, dist -> viewModel.addTriangulationRay(wp, az, dist) },
             onRemoveRay = { viewModel.removeTriangulationRay(it) },
+            onClearRays = {
+                viewModel.clearTriangulationRays()
+                Toast.makeText(context, "Лучи триангуляции очищены", Toast.LENGTH_SHORT).show()
+            },
             onSaveIntersection = { name ->
                 viewModel.saveTriangulationPoint(name)
                 showTriangulationDialog = false
@@ -974,7 +1070,6 @@ fun NavigationMainScreen(
             },
             onDismiss = {
                 showTriangulationDialog = false
-                viewModel.cancelTriangulation()
             }
         )
     }

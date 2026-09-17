@@ -35,6 +35,7 @@ fun TriangulationDialog(
     preselected: WaypointEntity?,
     onAddRay: (WaypointEntity, Double, Double?) -> Unit,
     onRemoveRay: (Int) -> Unit,
+    onClearRays: () -> Unit = {},
     onSaveIntersection: (String) -> Unit,
     onSaveRayEnd: (AzimuthRay, String) -> Unit,
     onDismiss: () -> Unit
@@ -237,7 +238,15 @@ fun TriangulationDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Закрыть", color = Color.Gray) }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (state.rays.isNotEmpty()) {
+                    TextButton(onClick = onClearRays) {
+                        Text("Очистить лучи", color = Color(0xFFEF9A9A), fontSize = 12.sp)
+                    }
+                    Spacer(modifier = Modifier.width(4.dp))
+                }
+                TextButton(onClick = onDismiss) { Text("Закрыть", color = Color.Gray) }
+            }
         }
     )
 }

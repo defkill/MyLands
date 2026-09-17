@@ -110,6 +110,7 @@ fun TacticalMapView(
     val currentTool by rememberUpdatedState(activeMapTool)
     val currentRulerState by rememberUpdatedState(rulerState)
     val currentWaypoints by rememberUpdatedState(waypoints)
+    val currentTriangulationState by rememberUpdatedState(triangulationState)
     val onCenterChangedState by rememberUpdatedState(onCenterChanged)
     val onZoomChangedState by rememberUpdatedState(onZoomChanged)
     val onMapTappedState by rememberUpdatedState(onMapTapped)
@@ -162,6 +163,21 @@ fun TacticalMapView(
                     if (clickedWp != null) {
                         onWaypointSelectedState(clickedWp)
                     } else {
+                        // Check if intersection point of triangulation was tapped
+                        val intersectionPt = currentTriangulationState.intersectionPoint()
+                        if (intersectionPt != null) {
+                            val (ix, iy) = MapProjection.geoToScreen(
+                                intersectionPt,
+                                currentCenter.latitude, currentCenter.longitude,
+                                currentZoom, size.width.toFloat(), size.height.toFloat()
+                            )
+                            val dx = ix - offset.x
+                            val dy = iy - offset.y
+                            if (dx * dx + dy * dy < 2500f) { // 50px radius around intersection crosshair
+                                onMapTappedState(intersectionPt)
+                                return@detectTapGestures
+                            }
+                        }
                         onMapTappedState(tappedGeo)
                     }
                 }
@@ -261,7 +277,7 @@ fun TacticalMapView(
         drawRouteBuilder(routeBuilderState, center, zoom, width, height, angleUnit)
 
         // 5. Draw triangulation rays and their crossing point
-        if (triangulationState.isActive && triangulationState.rays.isNotEmpty()) {
+        if (triangulationState.rays.isNotEmpty()) {
             drawTriangulation(triangulationState, center, zoom, width, height)
         }
 

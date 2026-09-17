@@ -176,7 +176,7 @@ object GeodesyEngine {
 
     /**
      * Direct 2-ray azimuth intersection (геодезическая прямая засечка по двум направлениям).
-     * Computes intersection in a conformal projected plane (Gauss-Kruger) to preserve angles and linear accuracy.
+     * Computes high-precision intersection in local tangent plane (East-North-Up) based on WGS84 coordinates.
      *
      * @param p1 Starting point 1 (WGS84)
      * @param azimuth1Deg Azimuth from point 1 to target in degrees [0..360)
@@ -189,66 +189,56 @@ object GeodesyEngine {
         p2: GeoPoint,
         azimuth2Deg: Double
     ): IntersectionResult {
-        // Project both points into Gauss-Kruger using the average zone
-        val avgLon = (p1.longitude + p2.longitude) / 2.0
-        val zone = GaussKrugerConverter.getZone6(avgLon)
+        val meanLatRad = Math.toRadians((p1.latitude + p2.latitude) / 2.0)
+        
+        // Meters per degree latitude and longitude on WGS-84 ellipsoid
+        val metersPerDegLat = 111132.954 - 559.822 * cos(2.0 * meanLatRad) + 1.175 * cos(4.0 * meanLatRad)
+        val metersPerDegLon = (111412.84 * cos(meanLatRad) - 93.5 * cos(3.0 * meanLatRad)).coerceAtLeast(100.0)
 
-        // Convert WGS84 -> SK42 -> GK
-        val (sk42Lat1, sk42Lon1, _) = DatumTransform.wgs84ToSk42(p1.latitude, p1.longitude)
-        val (sk42Lat2, sk42Lon2, _) = DatumTransform.wgs84ToSk42(p2.latitude, p2.longitude)
+        // Local ENU coordinates with origin at p1:
+        // Point 1: (E1 = 0, N1 = 0)
+        // Point 2: (E2 = deltaE, N2 = deltaN)
+        val deltaE = (p2.longitude - p1.longitude) * metersPerDegLon
+        val deltaN = (p2.latitude - p1.latitude) * metersPerDegLat
 
-        val gk1 = GaussKrugerConverter.forward(sk42Lat1, sk42Lon1, zoneOverride = zone)
-        val gk2 = GaussKrugerConverter.forward(sk42Lat2, sk42Lon2, zoneOverride = zone)
+        val a1Rad = Math.toRadians(azimuth1Deg)
+        val a2Rad = Math.toRadians(azimuth2Deg)
 
-        // Meridian convergence (сближение меридианов) gamma = (L - L0) * sin(B)
-        val l0 = GaussKrugerConverter.getCentralMeridian6(zone)
-        val gamma1Deg = (sk42Lon1 - l0) * sin(Math.toRadians(sk42Lat1))
-        val gamma2Deg = (sk42Lon2 - l0) * sin(Math.toRadians(sk42Lat2))
-
-        // Grid azimuth (дирекционный угол) = True azimuth - meridian convergence
-        val gridAz1 = (azimuth1Deg - gamma1Deg + 360.0) % 360.0
-        val gridAz2 = (azimuth2Deg - gamma2Deg + 360.0) % 360.0
-
-        val a1Rad = Math.toRadians(gridAz1)
-        val a2Rad = Math.toRadians(gridAz2)
-
-        // In Gauss-Kruger: X = North, Y = East.
-        // Direction vectors: (cos(az), sin(az))
-        val cos1 = cos(a1Rad)
+        // Direction unit vectors in ENU: (East = sin(az), North = cos(az))
         val sin1 = sin(a1Rad)
-        val cos2 = cos(a2Rad)
+        val cos1 = cos(a1Rad)
         val sin2 = sin(a2Rad)
+        val cos2 = cos(a2Rad)
 
-        // Linear system:
-        // cos1 * d1 - cos2 * d2 = deltaX
-        // sin1 * d1 - sin2 * d2 = deltaY
-        val deltaX = gk2.x - gk1.x
-        val deltaY = gk2.y - gk1.y
-
-        // Determinant = sin(a1 - a2)
-        val det = sin(a1Rad - a2Rad)
+        // Determinant of linear system: [ sin1  -sin2 ] [ d1 ] = [ deltaE ]
+        //                               [ cos1  -cos2 ] [ d2 ] = [ deltaN ]
+        // det = sin1 * (-cos2) - (-sin2) * cos1 = sin2 * cos1 - cos2 * sin1 = sin(a2 - a1) = -sin(a1 - a2)
+        val det = sin2 * cos1 - cos2 * sin1
 
         val azDiff = abs((azimuth1Deg - azimuth2Deg + 360.0) % 360.0)
         if (azDiff < 0.2 || abs(azDiff - 180.0) < 0.2 || abs(det) < 0.005) {
             return IntersectionResult.RaysParallel()
         }
 
-        val d1 = (-deltaX * sin2 + deltaY * cos2) / det
-        val d2 = (-deltaX * sin1 + deltaY * cos1) / det
+        // Solve for distances along rays:
+        // d1 = (deltaN * sin2 - deltaE * cos2) / det
+        // d2 = (deltaN * sin1 - deltaE * cos1) / det
+        val d1 = (deltaN * sin2 - deltaE * cos2) / det
+        val d2 = (deltaN * sin1 - deltaE * cos1) / det
 
-        if (d1 < 0 || d2 < 0) {
+        if (d1 < 0.0 || d2 < 0.0) {
             return IntersectionResult.RaysDiverge()
         }
 
-        // Intersection in Gauss-Kruger
-        val xInter = gk1.x + d1 * cos1
-        val yInter = gk1.y + d1 * sin1
+        // Intersection point in ENU relative to p1
+        val interE = d1 * sin1
+        val interN = d1 * cos1
 
-        // Inverse Gauss-Kruger -> SK42 -> WGS84
-        val (sk42LatInter, sk42LonInter) = GaussKrugerConverter.inverse(xInter, yInter, zoneInput = zone)
-        val (wgsLatInter, wgsLonInter, _) = DatumTransform.sk42ToWgs84(sk42LatInter, sk42LonInter)
+        // Convert back to WGS84
+        val wgsLatInter = p1.latitude + (interN / metersPerDegLat)
+        val wgsLonInter = p1.longitude + (interE / metersPerDegLon)
 
-        val angleBetween = abs(Math.toDegrees(asin(abs(det))))
+        val angleBetween = abs(Math.toDegrees(asin(abs(det).coerceAtMost(1.0))))
 
         val approxAlt = if (p1.altitude != null && p2.altitude != null) {
             (p1.altitude + p2.altitude) / 2.0

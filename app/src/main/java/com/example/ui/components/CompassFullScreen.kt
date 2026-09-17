@@ -3,9 +3,12 @@ package com.example.ui.components
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -187,7 +190,7 @@ fun CompassFullScreenDialog(
     }
 }
 
-private fun cardinalName(deg: Double): String {
+fun cardinalName(deg: Double): String {
     val d = ((deg % 360) + 360) % 360
     return when {
         d < 22.5 -> "Север"
@@ -199,6 +202,157 @@ private fun cardinalName(deg: Double): String {
         d < 292.5 -> "Запад"
         d < 337.5 -> "Северо-запад"
         else -> "Север"
+    }
+}
+
+/**
+ * Compact Tactical Compass HUD widget that floats on the map with a semi-transparent background.
+ * Shows a mini rotating dial, azimuth, and cardinal direction.
+ * Tapping expands to the full-screen compass; includes a close button to dismiss.
+ */
+@Composable
+fun MiniCompassHudWidget(
+    orientationData: OrientationData,
+    angleUnit: AngleUnit,
+    onExpand: () -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val heading = orientationData.trueHeadingDeg.toDouble()
+    Surface(
+        modifier = modifier
+            .testTag("mini_compass_hud")
+            .clickable { onExpand() },
+        color = Color(0xCC10151E), // Semi-transparent tactical dark
+        shape = RoundedCornerShape(12.dp),
+        tonalElevation = 6.dp,
+        shadowElevation = 4.dp
+    ) {
+        Column(
+            modifier = Modifier
+                .padding(horizontal = 8.dp, vertical = 6.dp)
+                .width(108.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // Header: title & close button
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "КОМПАС",
+                    color = Color(0xFF00E5FF),
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                IconButton(
+                    onClick = onClose,
+                    modifier = Modifier
+                        .size(20.dp)
+                        .testTag("mini_compass_close_button")
+                ) {
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = "Закрыть компас",
+                        tint = Color(0xFF90A4AE),
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(2.dp))
+
+            // Mini rotating dial
+            Box(
+                modifier = Modifier
+                    .size(68.dp)
+                    .padding(2.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val cx = size.width / 2f
+                    val cy = size.height / 2f
+                    val r = size.minDimension / 2f * 0.88f
+
+                    // Fixed indicator top arrow
+                    val arrowColor = Color(0xFF00E5FF)
+                    val arrowTop = cy - r - 2f
+                    drawLine(
+                        color = arrowColor,
+                        start = Offset(cx, arrowTop),
+                        end = Offset(cx, cy - r + 8f),
+                        strokeWidth = 4f
+                    )
+
+                    // Rotated dial
+                    rotate(degrees = -heading.toFloat(), pivot = Offset(cx, cy)) {
+                        // Outer ring
+                        drawCircle(
+                            color = Color(0x66FFFFFF),
+                            radius = r,
+                            style = androidx.compose.ui.graphics.drawscope.Stroke(1.5f)
+                        )
+
+                        // 8 main ticks (every 45 degrees)
+                        for (d in 0 until 360 step 45) {
+                            val rad = Math.toRadians(d.toDouble() - 90.0)
+                            val inner = if (d % 90 == 0) r - 10f else r - 6f
+                            val col = if (d == 0) Color(0xFFFF5252) else Color.White
+                            drawLine(
+                                color = col,
+                                start = Offset(cx + (cos(rad) * inner).toFloat(), cy + (sin(rad) * inner).toFloat()),
+                                end = Offset(cx + (cos(rad) * r).toFloat(), cy + (sin(rad) * r).toFloat()),
+                                strokeWidth = if (d % 90 == 0) 3f else 1.5f
+                            )
+                        }
+
+                        // Cardinal letters
+                        val cardinals = listOf(0 to "С", 90 to "В", 180 to "Ю", 270 to "З")
+                        val pNorth = AndroidPaint().apply {
+                            color = android.graphics.Color.rgb(255, 100, 100)
+                            textSize = 18f
+                            isAntiAlias = true
+                            isFakeBoldText = true
+                            textAlign = AndroidPaint.Align.CENTER
+                        }
+                        val pOther = AndroidPaint().apply {
+                            color = android.graphics.Color.WHITE
+                            textSize = 15f
+                            isAntiAlias = true
+                            textAlign = AndroidPaint.Align.CENTER
+                        }
+                        cardinals.forEach { (d, label) ->
+                            val rad = Math.toRadians(d.toDouble() - 90.0)
+                            val lr = r - 16f
+                            val lx = cx + (cos(rad) * lr).toFloat()
+                            val ly = cy + (sin(rad) * lr).toFloat() + 6f
+                            drawContext.canvas.nativeCanvas.drawText(
+                                label, lx, ly,
+                                if (d == 0) pNorth else pOther
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(2.dp))
+
+            // Azimuth value & Cardinal text
+            Text(
+                text = AngleUnit.format(heading, angleUnit),
+                color = Color.White,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace
+            )
+            Text(
+                text = cardinalName(heading),
+                color = Color(0xFFB0BEC5),
+                fontSize = 10.sp,
+                maxLines = 1
+            )
+        }
     }
 }
 

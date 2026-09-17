@@ -78,14 +78,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val orientationData: StateFlow<OrientationData> = orientationManager.orientationData
     val pdrState: StateFlow<PdrState> = stepDetectorManager.pdrState
 
+    private val prefs = application.getSharedPreferences("tactical_nav_prefs", Context.MODE_PRIVATE)
+
     // Map viewport state
-    private val _mapCenter = MutableStateFlow(GeoPoint(50.4501, 30.5234)) // Kyiv center
+    private val _mapCenter = MutableStateFlow(
+        run {
+            val savedLat = if (prefs.contains("last_map_lat")) prefs.getFloat("last_map_lat", 50.4501f).toDouble() else 50.4501
+            val savedLon = if (prefs.contains("last_map_lon")) prefs.getFloat("last_map_lon", 30.5234f).toDouble() else 30.5234
+            GeoPoint(savedLat, savedLon)
+        }
+    )
     val mapCenter: StateFlow<GeoPoint> = _mapCenter.asStateFlow()
 
-    private val _mapZoom = MutableStateFlow(14.0)
+    private val _mapZoom = MutableStateFlow(
+        if (prefs.contains("last_map_zoom")) prefs.getFloat("last_map_zoom", 14.0f).toDouble() else 14.0
+    )
     val mapZoom: StateFlow<Double> = _mapZoom.asStateFlow()
 
-    private val _isFollowingLocation = MutableStateFlow(true)
+    private val _isFollowingLocation = MutableStateFlow(!prefs.contains("last_map_lat"))
     val isFollowingLocation: StateFlow<Boolean> = _isFollowingLocation.asStateFlow()
 
     private val _availableTileSources = MutableStateFlow<List<TileSource>>(TileSource.ALL)
@@ -445,10 +455,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setMapCenter(point: GeoPoint) {
         _mapCenter.value = point
         _isFollowingLocation.value = false
+        prefs.edit()
+            .putFloat("last_map_lat", point.latitude.toFloat())
+            .putFloat("last_map_lon", point.longitude.toFloat())
+            .apply()
     }
 
     fun setMapZoom(zoom: Double) {
-        _mapZoom.value = zoom.coerceIn(2.0, 19.0)
+        val bounded = zoom.coerceIn(2.0, 19.0)
+        _mapZoom.value = bounded
+        prefs.edit()
+            .putFloat("last_map_zoom", bounded.toFloat())
+            .apply()
     }
 
     fun zoomIn() {
@@ -1094,11 +1112,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val triangulationState: StateFlow<TriangulationState> = _triangulationState.asStateFlow()
 
     fun startTriangulation() {
-        _triangulationState.value = TriangulationState(isActive = true)
+        val current = _triangulationState.value
+        _triangulationState.value = current.copy(isActive = true)
     }
 
     fun cancelTriangulation() {
-        _triangulationState.value = TriangulationState(isActive = false)
+        // Keep rays on the map as requested by user; only deactivate active editing state
+        val current = _triangulationState.value
+        _triangulationState.value = current.copy(isActive = false)
+    }
+
+    fun clearTriangulationRays() {
+        _triangulationState.value = TriangulationState(isActive = false, rays = emptyList(), result = null)
     }
 
     /**
