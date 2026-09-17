@@ -9,6 +9,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.Warning
+import android.hardware.SensorManager
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -167,6 +169,38 @@ fun CompassFullScreenDialog(
                                         )
                                     }
                                 }
+                            }
+                        }
+                    }
+
+                    // Low compass accuracy warning banner
+                    if (orientationData.accuracy <= SensorManager.SENSOR_STATUS_ACCURACY_LOW &&
+                        orientationData.accuracy != SensorManager.SENSOR_STATUS_UNRELIABLE &&
+                        orientationData.accuracy != 0
+                    ) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Surface(
+                            color = Color(0x33FF9800),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.padding(horizontal = 20.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    Icons.Default.Warning,
+                                    contentDescription = null,
+                                    tint = Color(0xFFFFB74D),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Точность компаса низкая · Опишите «восьмёрку» телефоном для калибровки",
+                                    color = Color(0xFFFFCC80),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
                             }
                         }
                     }
@@ -346,12 +380,32 @@ fun MiniCompassHudWidget(
                 fontWeight = FontWeight.Bold,
                 fontFamily = FontFamily.Monospace
             )
-            Text(
-                text = cardinalName(heading),
-                color = Color(0xFFB0BEC5),
-                fontSize = 10.sp,
-                maxLines = 1
-            )
+            val isLowAccuracy = orientationData.accuracy <= SensorManager.SENSOR_STATUS_ACCURACY_LOW &&
+                    orientationData.accuracy != 0
+            if (isLowAccuracy) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Default.Warning,
+                        contentDescription = "Низкая точность компаса",
+                        tint = Color(0xFFFFB74D),
+                        modifier = Modifier.size(10.dp)
+                    )
+                    Spacer(modifier = Modifier.width(2.dp))
+                    Text(
+                        text = "Калибр.",
+                        color = Color(0xFFFFB74D),
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            } else {
+                Text(
+                    text = cardinalName(heading),
+                    color = Color(0xFFB0BEC5),
+                    fontSize = 10.sp,
+                    maxLines = 1
+                )
+            }
         }
     }
 }

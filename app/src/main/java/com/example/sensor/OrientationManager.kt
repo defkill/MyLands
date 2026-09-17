@@ -155,6 +155,9 @@ class OrientationManager(private val context: Context) : SensorEventListener {
         }
     }
 
+    @Volatile
+    private var lastAccuracy: Int = SensorManager.SENSOR_STATUS_ACCURACY_HIGH
+
     private fun processRotationMatrix(accuracy: Int) {
         SensorManager.getOrientation(rotationMatrix, orientationAngles)
 
@@ -173,6 +176,7 @@ class OrientationManager(private val context: Context) : SensorEventListener {
 
         val trueHeadingDeg = (smoothedHeadingDeg + currentDeclinationDeg + 360f) % 360f
 
+        val effectiveAccuracy = if (accuracy != 0) accuracy else lastAccuracy
         lastUpdateTimestamp = System.currentTimeMillis()
         _orientationData.value = OrientationData(
             magneticHeadingDeg = smoothedHeadingDeg,
@@ -180,9 +184,14 @@ class OrientationManager(private val context: Context) : SensorEventListener {
             magneticDeclinationDeg = currentDeclinationDeg,
             pitchDeg = Math.toDegrees(pitchRad).toFloat(),
             rollDeg = Math.toDegrees(rollRad).toFloat(),
-            accuracy = accuracy
+            accuracy = effectiveAccuracy
         )
     }
 
-    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
+        if (sensor?.type == Sensor.TYPE_ROTATION_VECTOR || sensor?.type == Sensor.TYPE_MAGNETIC_FIELD) {
+            lastAccuracy = accuracy
+            _orientationData.value = _orientationData.value.copy(accuracy = accuracy)
+        }
+    }
 }
