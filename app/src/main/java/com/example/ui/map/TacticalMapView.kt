@@ -68,6 +68,7 @@ fun TacticalMapView(
     angleUnit: AngleUnit,
     onCandidatePointDragStarted: ((GeoPoint) -> Unit)? = null,
     onCandidatePointDragMoved: ((GeoPoint) -> Unit)? = null,
+    onRayEndpointTapped: (() -> Unit)? = null,
     manualPosition: GeoPoint? = null,
     modifier: Modifier = Modifier
 ) {
@@ -121,6 +122,7 @@ fun TacticalMapView(
     val onRulerPointChangedState by rememberUpdatedState(onRulerPointChanged)
     val onCandidatePointDragStartedState by rememberUpdatedState(onCandidatePointDragStarted)
     val onCandidatePointDragMovedState by rememberUpdatedState(onCandidatePointDragMoved)
+    val onRayEndpointTappedState by rememberUpdatedState(onRayEndpointTapped)
     var isDraggingCandidatePoint by remember { mutableStateOf(false) }
 
     Canvas(
@@ -169,6 +171,25 @@ fun TacticalMapView(
                     if (clickedWp != null) {
                         onWaypointSelectedState(clickedWp)
                     } else {
+                        // Check if endpoint of any bounded ray was tapped
+                        val tappedRayEndpoint = currentTriangulationState.rays.any { ray ->
+                            if (ray.lengthMeters != null) {
+                                val end = GeodesyEngine.destinationPoint(ray.originPoint, ray.effectiveLengthMeters(), ray.azimuthDeg)
+                                val (ex, ey) = MapProjection.geoToScreen(
+                                    end,
+                                    currentCenter.latitude, currentCenter.longitude,
+                                    currentZoom, size.width.toFloat(), size.height.toFloat()
+                                )
+                                val dx = ex - offset.x
+                                val dy = ey - offset.y
+                                dx * dx + dy * dy < 2500f // 50px touch radius around ray endpoint
+                            } else false
+                        }
+                        if (tappedRayEndpoint) {
+                            onRayEndpointTappedState?.invoke()
+                            return@detectTapGestures
+                        }
+
                         // Check if intersection point of triangulation was tapped
                         val intersectionPt = currentTriangulationState.intersectionPoint()
                         if (intersectionPt != null) {

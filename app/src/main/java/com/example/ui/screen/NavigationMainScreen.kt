@@ -132,7 +132,6 @@ fun NavigationMainScreen(
     }
 
     var showAddWaypointDialog by remember { mutableStateOf(false) }
-    var isCoordinateBarCompact by remember { mutableStateOf(true) }
     var showMiniCompassHud by remember { mutableStateOf(false) }
     var showCompassScreen by remember { mutableStateOf(false) }
     var showTriangulationDialog by remember { mutableStateOf(false) }
@@ -314,6 +313,7 @@ fun NavigationMainScreen(
                 angleUnit = userPreferences.defaultAngleUnit,
                 onCandidatePointDragStarted = { viewModel.onCandidatePointDragStarted(it) },
                 onCandidatePointDragMoved = { viewModel.updateCandidatePointPosition(it) },
+                onRayEndpointTapped = { showTriangulationDialog = true },
                 manualPosition = manualPositionOverride
             )
 
@@ -626,79 +626,11 @@ fun NavigationMainScreen(
                 )
             }
 
-            // 2c. Active Triangulation Floating Badge (when rays exist)
-            if (triangulationState.rays.isNotEmpty() && !showTriangulationDialog) {
-                Surface(
-                    color = Color(0xDD1E2630),
-                    shape = RoundedCornerShape(16.dp),
-                    border = BorderStroke(1.dp, Color(0xFFFF7043).copy(alpha = 0.6f)),
-                    tonalElevation = 6.dp,
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .padding(start = 12.dp, top = 56.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        IconButton(
-                            onClick = { showTriangulationDialog = true },
-                            modifier = Modifier.size(28.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.ChangeHistory,
-                                contentDescription = "Открыть триангуляцию",
-                                tint = Color(0xFFFF7043),
-                                modifier = Modifier.size(16.dp)
-                            )
-                        }
-                        Text(
-                            text = "Лучи: ${triangulationState.rays.size}",
-                            color = Color.White,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                            modifier = Modifier.clickable { showTriangulationDialog = true }
-                        )
-                        val intersectionPt = triangulationState.intersectionPoint()
-                        if (intersectionPt != null) {
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Button(
-                                onClick = {
-                                    viewModel.saveTriangulationPoint("Цель ${waypoints.size + 1}")
-                                    Toast.makeText(context, "Точка цели сохранена!", Toast.LENGTH_SHORT).show()
-                                },
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.height(26.dp)
-                            ) {
-                                Text("+ Точка цели", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                            }
-                        }
-                        Spacer(modifier = Modifier.width(4.dp))
-                        IconButton(
-                            onClick = {
-                                viewModel.cancelTriangulation()
-                                Toast.makeText(context, "Триангуляция очищена", Toast.LENGTH_SHORT).show()
-                            },
-                            modifier = Modifier.size(24.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.Close,
-                                contentDescription = "Очистить триангуляцию",
-                                tint = Color(0xFFEF9A9A),
-                                modifier = Modifier.size(14.dp)
-                            )
-                        }
-                    }
-                }
-            }
-
             // 2b. Top-Left Zoom Controls
             Column(
                 modifier = Modifier
                     .align(Alignment.TopStart)
-                    .padding(start = 12.dp, top = 96.dp),
+                    .padding(start = 12.dp, top = 68.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
@@ -953,8 +885,8 @@ fun NavigationMainScreen(
                     )
                 }
 
-                // Active Route Builder Panel
-                if (routeBuilderState.isActive) {
+                // Active Route Builder Panel (when expanded)
+                if (routeBuilderState.isActive && !isRouteBuilderMinimized) {
                     RouteBuilderPanel(
                         routeState = routeBuilderState,
                         allWaypoints = waypoints,
@@ -979,9 +911,136 @@ fun NavigationMainScreen(
                             isRouteBuilderMinimized = false
                             viewModel.cancelRouteBuilder()
                         },
-                        isMinimized = isRouteBuilderMinimized,
-                        onToggleMinimized = { isRouteBuilderMinimized = !isRouteBuilderMinimized }
+                        isMinimized = false,
+                        onToggleMinimized = { isRouteBuilderMinimized = true }
                     )
+                }
+
+                // Bottom-Right Floating Badges (Active Triangulation & Minimized Route Builder)
+                val showMinimizedRoute = routeBuilderState.isActive && isRouteBuilderMinimized
+                val showTriangulationBadge = triangulationState.rays.isNotEmpty() && !showTriangulationDialog
+                if (showMinimizedRoute || showTriangulationBadge) {
+                    Column(
+                        modifier = Modifier
+                            .align(Alignment.End)
+                            .padding(end = 12.dp, bottom = 6.dp),
+                        horizontalAlignment = Alignment.End,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        // Minimized Route Builder Badge
+                        if (showMinimizedRoute) {
+                            Surface(
+                                color = Color(0xDD1E2630),
+                                shape = RoundedCornerShape(16.dp),
+                                border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.6f)),
+                                tonalElevation = 6.dp,
+                                modifier = Modifier
+                                    .testTag("minimized_route_badge")
+                                    .clickable { isRouteBuilderMinimized = false }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Default.KeyboardArrowUp,
+                                        contentDescription = "Развернуть панель маршрута",
+                                        tint = Color(0xFF00E5FF),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "Маршруты",
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF00E5FF),
+                                        fontSize = 12.sp,
+                                        maxLines = 1
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    IconButton(
+                                        onClick = {
+                                            isRouteBuilderMinimized = false
+                                            viewModel.cancelRouteBuilder()
+                                        },
+                                        modifier = Modifier.size(20.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Close,
+                                            contentDescription = "Отмена маршрута",
+                                            tint = Color.Gray,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // Active Triangulation Floating Badge
+                        if (showTriangulationBadge) {
+                            Surface(
+                                color = Color(0xDD1E2630),
+                                shape = RoundedCornerShape(16.dp),
+                                border = BorderStroke(1.dp, Color(0xFFFF7043).copy(alpha = 0.6f)),
+                                tonalElevation = 6.dp,
+                                modifier = Modifier.testTag("triangulation_floating_badge")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    IconButton(
+                                        onClick = { showTriangulationDialog = true },
+                                        modifier = Modifier.size(28.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.ChangeHistory,
+                                            contentDescription = "Открыть триангуляцию",
+                                            tint = Color(0xFFFF7043),
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                    Text(
+                                        text = "Лучи: ${triangulationState.rays.size}",
+                                        color = Color.White,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        modifier = Modifier.clickable { showTriangulationDialog = true }
+                                    )
+                                    val intersectionPt = triangulationState.intersectionPoint()
+                                    if (intersectionPt != null) {
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Button(
+                                            onClick = {
+                                                viewModel.saveTriangulationPoint("Цель ${waypoints.size + 1}")
+                                                Toast.makeText(context, "Точка цели сохранена!", Toast.LENGTH_SHORT).show()
+                                            },
+                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                            shape = RoundedCornerShape(12.dp),
+                                            modifier = Modifier.height(26.dp)
+                                        ) {
+                                            Text("+ Точка цели", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    IconButton(
+                                        onClick = {
+                                            viewModel.clearTriangulationRays()
+                                            Toast.makeText(context, "Триангуляция очищена", Toast.LENGTH_SHORT).show()
+                                        },
+                                        modifier = Modifier.size(24.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Close,
+                                            contentDescription = "Очистить триангуляцию",
+                                            tint = Color(0xFFEF9A9A),
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
 
                 // Main Tactical Coordinate Bottom Bar
@@ -994,8 +1053,7 @@ fun NavigationMainScreen(
                     gpsStatus = gpsStatus,
                     pdrState = pdrState,
                     terrainElevation = terrainElevation,
-                    isCompact = isCoordinateBarCompact,
-                    onToggleCompact = { isCoordinateBarCompact = !isCoordinateBarCompact },
+                    isCompact = true,
                     onClick = { viewModel.openCoordinateModal() }
                 )
             }
@@ -1432,6 +1490,7 @@ fun NavigationMainScreen(
             position = effectiveLocation,
             coordinateSystem = userPreferences.defaultCoordinateSystem,
             angleUnit = userPreferences.defaultAngleUnit,
+            waypoints = waypoints,
             isEstimated = isPositionEstimated,
             blindDistanceMeters = blindDistanceMeters,
             onCreatePoint = { pt ->

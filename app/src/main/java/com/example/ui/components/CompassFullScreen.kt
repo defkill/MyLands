@@ -2,7 +2,10 @@ package com.example.ui.components
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
@@ -18,6 +21,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.platform.testTag
@@ -27,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.example.data.entity.WaypointEntity
 import com.example.model.AngleUnit
 import com.example.model.CoordinateSystem
 import com.example.model.GeoPoint
@@ -35,6 +40,14 @@ import com.example.sensor.OrientationData
 import android.graphics.Paint as AndroidPaint
 import kotlin.math.cos
 import kotlin.math.sin
+
+data class CompassPointMarker(
+    val index: Int,
+    val name: String,
+    val distanceMeters: Double,
+    val azimuthDeg: Double,
+    val colorArgb: Int
+)
 
 /**
  * Full-screen compass. Deliberately minimal: a rotating dial, the heading, the cardinal
@@ -47,17 +60,43 @@ fun CompassFullScreenDialog(
     position: GeoPoint?,
     coordinateSystem: CoordinateSystem,
     angleUnit: AngleUnit,
+    waypoints: List<WaypointEntity> = emptyList(),
     isEstimated: Boolean = false,
     blindDistanceMeters: Double = 0.0,
     onCreatePoint: (GeoPoint) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val nearestPoints: List<CompassPointMarker> = remember(waypoints, position) {
+        if (position == null) emptyList()
+        else {
+            waypoints
+                .map { wp ->
+                    val dist = GeodesyEngine.distanceMeters(position, wp.toGeoPoint())
+                    val az = GeodesyEngine.azimuthDegrees(position, wp.toGeoPoint())
+                    Triple(wp, dist, az)
+                }
+                .sortedBy { it.second }
+                .take(5)
+                .mapIndexed { idx, item ->
+                    CompassPointMarker(
+                        index = idx + 1,
+                        name = item.first.name,
+                        distanceMeters = item.second,
+                        azimuthDeg = item.third,
+                        colorArgb = item.first.colorArgb
+                    )
+                }
+        }
+    }
+
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
         Surface(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .windowInsetsPadding(WindowInsets.safeDrawing),
             color = Color(0xFF0B0F14)
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
@@ -73,15 +112,54 @@ fun CompassFullScreenDialog(
                     Icon(Icons.Default.Close, contentDescription = "Закрыть", tint = Color(0xFF90A4AE))
                 }
 
-                Text(
-                    text = "КОМПАС",
-                    color = Color(0xFF90A4AE),
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
+                // Top Header and Nearest Points Row
+                Column(
                     modifier = Modifier
                         .align(Alignment.TopStart)
-                        .padding(start = 20.dp, top = 22.dp)
-                )
+                        .fillMaxWidth()
+                        .padding(top = 18.dp, end = 52.dp)
+                ) {
+                    Text(
+                        text = "КОМПАС",
+                        color = Color(0xFF90A4AE),
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(start = 20.dp)
+                    )
+
+                    if (nearestPoints.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        val numberSymbols = listOf("①", "②", "③", "④", "⑤")
+                        LazyRow(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("compass_nearest_points_row"),
+                            contentPadding = PaddingValues(horizontal = 20.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(nearestPoints) { item ->
+                                val numIcon = numberSymbols.getOrElse(item.index - 1) { "${item.index}" }
+                                Surface(
+                                    color = Color(item.colorArgb).copy(alpha = 0.25f),
+                                    shape = RoundedCornerShape(8.dp),
+                                    border = BorderStroke(1.dp, Color(item.colorArgb).copy(alpha = 0.7f))
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "$numIcon ${item.name} — ${"%.0f".format(item.distanceMeters)} м",
+                                            color = Color.White,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
 
                 Column(
                     modifier = Modifier
@@ -99,7 +177,7 @@ fun CompassFullScreenDialog(
                         val heading = orientationData.trueHeadingDeg.toDouble()
 
                         Canvas(modifier = Modifier.fillMaxSize()) {
-                            drawCompassDial(heading)
+                            drawCompassDial(heading, nearestPoints)
                         }
 
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -210,7 +288,7 @@ fun CompassFullScreenDialog(
                             "погрешность растёт примерно на 5-10% пути"
                         else -> "Магнитное склонение: ${"%+.1f".format(orientationData.magneticDeclinationDeg)}°"
                     },
-                    color = if (isEstimated) Color(0xFFFFB74D) else Color(0xFF546E7A),
+                    color = if (isEstimated) Color(0xFFFFB74D) else Color(0xFF607D8B),
                     fontSize = 12.sp,
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
@@ -413,7 +491,10 @@ internal fun isCompassAccuracyLow(accuracy: Int): Boolean {
  * Draws the dial rotated against the heading, so the ring turns while the fixed
  * top arrow marks the direction the device is pointing.
  */
-private fun DrawScope.drawCompassDial(headingDeg: Double) {
+private fun DrawScope.drawCompassDial(
+    headingDeg: Double,
+    pointMarkers: List<CompassPointMarker> = emptyList()
+) {
     val cx = size.width / 2f
     val cy = size.height / 2f
     val radius = size.minDimension / 2f * 0.82f
@@ -448,6 +529,14 @@ private fun DrawScope.drawCompassDial(headingDeg: Double) {
         textSize = 26f
         isAntiAlias = true
         textAlign = AndroidPaint.Align.CENTER
+    }
+    val numberPaint = AndroidPaint().apply {
+        color = android.graphics.Color.WHITE
+        textSize = 22f
+        isAntiAlias = true
+        isFakeBoldText = true
+        textAlign = AndroidPaint.Align.CENTER
+        setShadowLayer(2f, 0f, 1f, android.graphics.Color.BLACK)
     }
 
     rotate(degrees = -headingDeg.toFloat(), pivot = Offset(cx, cy)) {
@@ -485,6 +574,17 @@ private fun DrawScope.drawCompassDial(headingDeg: Double) {
                 label, lx, ly,
                 if (deg == 0) northPaint else labelPaint
             )
+        }
+
+        // Nearest waypoints markers on the dial
+        pointMarkers.forEach { marker ->
+            val rad = Math.toRadians(marker.azimuthDeg - 90.0)
+            val markerRadius = radius - 6f
+            val mx = cx + (cos(rad) * markerRadius).toFloat()
+            val my = cy + (sin(rad) * markerRadius).toFloat()
+            drawCircle(color = Color(marker.colorArgb), radius = 14f, center = Offset(mx, my))
+            drawCircle(color = Color.White.copy(alpha = 0.85f), radius = 14f, center = Offset(mx, my), style = Stroke(1.5f))
+            drawContext.canvas.nativeCanvas.drawText(marker.index.toString(), mx, my + 8f, numberPaint)
         }
     }
 }
