@@ -134,9 +134,14 @@ jobs:
           chmod +x ./gradlew
 
       - name: Decode Release Keystore
-        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
-          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > "${{ runner.temp }}/release.jks"
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::Секрет KEYSTORE_BASE64 не задан. Добавьте его в Settings → Secrets and variables → Actions перед релизной сборкой."
+            exit 1
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > "${{ runner.temp }}/release.jks"
 
       - name: Build Release Artifacts
         env:
