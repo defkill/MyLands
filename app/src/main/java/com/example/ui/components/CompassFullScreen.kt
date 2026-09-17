@@ -174,10 +174,7 @@ fun CompassFullScreenDialog(
                     }
 
                     // Low compass accuracy warning banner
-                    if (orientationData.accuracy <= SensorManager.SENSOR_STATUS_ACCURACY_LOW &&
-                        orientationData.accuracy != SensorManager.SENSOR_STATUS_UNRELIABLE &&
-                        orientationData.accuracy != 0
-                    ) {
+                    if (isCompassAccuracyLow(orientationData.accuracy)) {
                         Spacer(modifier = Modifier.height(10.dp))
                         Surface(
                             color = Color(0x33FF9800),
@@ -380,9 +377,7 @@ fun MiniCompassHudWidget(
                 fontWeight = FontWeight.Bold,
                 fontFamily = FontFamily.Monospace
             )
-            val isLowAccuracy = orientationData.accuracy <= SensorManager.SENSOR_STATUS_ACCURACY_LOW &&
-                    orientationData.accuracy != 0
-            if (isLowAccuracy) {
+            if (isCompassAccuracyLow(orientationData.accuracy)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         Icons.Default.Warning,
@@ -408,6 +403,10 @@ fun MiniCompassHudWidget(
             }
         }
     }
+}
+
+internal fun isCompassAccuracyLow(accuracy: Int): Boolean {
+    return accuracy <= SensorManager.SENSOR_STATUS_ACCURACY_LOW
 }
 
 /**
