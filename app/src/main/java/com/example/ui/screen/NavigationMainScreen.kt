@@ -50,6 +50,8 @@ import com.example.viewmodel.MainViewModel
 import java.io.File
 import java.io.FileOutputStream
 
+private val COMPACT_COORD_BAR_HEIGHT = 76.dp
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NavigationMainScreen(
@@ -154,7 +156,7 @@ fun NavigationMainScreen(
     var showDataExchangeDialog by remember { mutableStateOf(false) }
     var showBatteryOptimizationDialog by remember { mutableStateOf(false) }
     var hasDismissedBatteryOptPrompt by remember { mutableStateOf(false) }
-    var bottomPanelHeightPx by remember { mutableStateOf(0) }
+    var extraContentHeightPx by remember { mutableStateOf(0) }
 
     // Location permission can be missing even when the system location toggle is on:
     // the OS switch and the per-app grant are separate things. Allow re-requesting it
@@ -814,112 +816,120 @@ fun NavigationMainScreen(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .onGloballyPositioned { coordinates ->
-                        bottomPanelHeightPx = coordinates.size.height
-                    }
             ) {
-                // Active Ruler Overlay or Selected Target (Candidate / Waypoint) Overlay
-                val isAnyLosActive = isLosActive || isPickingLosTarget || losResult != null
-                if (rulerState.isActive) {
-                    RulerOverlay(
-                        rulerState = rulerState,
-                        angleUnit = userPreferences.defaultAngleUnit,
-                        onClose = { viewModel.toggleRuler() }
-                    )
-                } else if (!isAnyLosActive && (candidatePoint != null || selectedWaypoint != null)) {
-                    val targetPt: GeoPoint = candidatePoint ?: selectedWaypoint!!.toGeoPoint()
-                    val userPt: GeoPoint = gpsLocation ?: mapCenter
-                    val targetRuler = remember(userPt, targetPt) {
-                        RulerState.calculate(userPt, targetPt)
-                    }
-                    // Terrain height for the selected/candidate point, fetched once per point.
-                    var pointElevation by remember(targetPt) { mutableStateOf<Double?>(null) }
-                    LaunchedEffect(targetPt) {
-                        viewModel.elevationForPoint(targetPt) { pointElevation = it }
-                    }
-                    val elevationSuffix = pointElevation?.let { " • H: ${it.toInt()} м" } ?: ""
-
-                    val title = if (candidatePoint != null) {
-                        "ТОЧКА-КАНДИДАТ$elevationSuffix"
-                    } else {
-                        "ТОЧКА: ${selectedWaypoint?.name}$elevationSuffix"
-                    }
-                    val icon = if (candidatePoint != null) Icons.Default.Adjust else Icons.Default.Place
-                    val iconTint = if (candidatePoint != null) Color(0xFFFF9800) else Color(0xFF00E5FF)
-
-                    RulerOverlay(
-                        rulerState = targetRuler,
-                        angleUnit = userPreferences.defaultAngleUnit,
-                        title = title,
-                        icon = icon,
-                        iconTint = iconTint,
-                        onReverseAzimuthClick = {
-                            val revStr = targetRuler.formatReverseAzimuth(userPreferences.defaultAngleUnit)
-                            Toast.makeText(context, "Обратный азимут: $revStr", Toast.LENGTH_SHORT).show()
-                        },
-                        onSetAsMyLocation = if (candidatePoint != null) {
-                            {
-                                viewModel.setManualPosition(candidatePoint!!)
-                                Toast.makeText(context, "Точка установлена как текущее местоположение", Toast.LENGTH_SHORT).show()
-                            }
-                        } else null,
-                        onClose = {
-                            if (candidatePoint != null) {
-                                viewModel.clearCandidatePoint()
-                            } else {
-                                viewModel.clearSelectedWaypoint()
-                            }
+                // Measure only variable/conditional overlays (ruler, candidate/waypoint card, LoS, route builder)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onGloballyPositioned { coordinates ->
+                            extraContentHeightPx = coordinates.size.height
                         }
-                    )
-                }
+                ) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        // Active Ruler Overlay or Selected Target (Candidate / Waypoint) Overlay
+                        val isAnyLosActive = isLosActive || isPickingLosTarget || losResult != null
+                        if (rulerState.isActive) {
+                            RulerOverlay(
+                                rulerState = rulerState,
+                                angleUnit = userPreferences.defaultAngleUnit,
+                                onClose = { viewModel.toggleRuler() }
+                            )
+                        } else if (!isAnyLosActive && (candidatePoint != null || selectedWaypoint != null)) {
+                            val targetPt: GeoPoint = candidatePoint ?: selectedWaypoint!!.toGeoPoint()
+                            val userPt: GeoPoint = gpsLocation ?: mapCenter
+                            val targetRuler = remember(userPt, targetPt) {
+                                RulerState.calculate(userPt, targetPt)
+                            }
+                            // Terrain height for the selected/candidate point, fetched once per point.
+                            var pointElevation by remember(targetPt) { mutableStateOf<Double?>(null) }
+                            LaunchedEffect(targetPt) {
+                                viewModel.elevationForPoint(targetPt) { pointElevation = it }
+                            }
+                            val elevationSuffix = pointElevation?.let { " • H: ${it.toInt()} м" } ?: ""
 
-                // Visibility check overlay: stays on the map so the ray remains visible.
-                if (isLosActive || isPickingLosTarget || losResult != null) {
-                    VisibilityCheckOverlay(
-                        result = losResult,
-                        isPickingTarget = isPickingLosTarget,
-                        isCalculating = isCalculatingLos,
-                        hasTarget = losTarget != null,
-                        onCreateObstacleWaypoint = {
-                            viewModel.createObstacleWaypoint()
-                            Toast.makeText(context, "Точка на препятствии создана", Toast.LENGTH_SHORT).show()
-                        },
-                        onImportElevation = { showDataExchangeDialog = true },
-                        onOpenSettings = { showLosDialog = true },
-                        onClose = { viewModel.cancelVisibilityCheck() },
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                    )
-                }
+                            val title = if (candidatePoint != null) {
+                                "ТОЧКА-КАНДИДАТ$elevationSuffix"
+                            } else {
+                                "ТОЧКА: ${selectedWaypoint?.name}$elevationSuffix"
+                            }
+                            val icon = if (candidatePoint != null) Icons.Default.Adjust else Icons.Default.Place
+                            val iconTint = if (candidatePoint != null) Color(0xFFFF9800) else Color(0xFF00E5FF)
 
-                // Active Route Builder Panel (when expanded)
-                if (routeBuilderState.isActive && !isRouteBuilderMinimized) {
-                    RouteBuilderPanel(
-                        routeState = routeBuilderState,
-                        allWaypoints = waypoints,
-                        savedRoutes = routes,
-                        angleUnit = userPreferences.defaultAngleUnit,
-                        onToggleWaypoint = { viewModel.toggleWaypointInRoute(it) },
-                        onRouteNameChanged = { viewModel.setRouteName(it) },
-                        onSaveRoute = {
-                            viewModel.saveCurrentRoute()
-                            Toast.makeText(context, "Маршрут сохранен!", Toast.LENGTH_SHORT).show()
-                        },
-                        onLoadRoute = { viewModel.loadRouteIntoBuilder(it) },
-                        onShowProfile = { route ->
-                            showRouteProfileFor = route
-                            viewModel.calculateRouteProfile(route)
-                        },
-                        onDeleteRoute = {
-                            viewModel.deleteRoute(it)
-                            Toast.makeText(context, "Маршрут удалён", Toast.LENGTH_SHORT).show()
-                        },
-                        onCancel = {
-                            isRouteBuilderMinimized = false
-                            viewModel.cancelRouteBuilder()
-                        },
-                        isMinimized = false,
-                        onToggleMinimized = { isRouteBuilderMinimized = true }
-                    )
+                            RulerOverlay(
+                                rulerState = targetRuler,
+                                angleUnit = userPreferences.defaultAngleUnit,
+                                title = title,
+                                icon = icon,
+                                iconTint = iconTint,
+                                onReverseAzimuthClick = {
+                                    val revStr = targetRuler.formatReverseAzimuth(userPreferences.defaultAngleUnit)
+                                    Toast.makeText(context, "Обратный азимут: $revStr", Toast.LENGTH_SHORT).show()
+                                },
+                                onSetAsMyLocation = if (candidatePoint != null) {
+                                    {
+                                        viewModel.setManualPosition(candidatePoint!!)
+                                        Toast.makeText(context, "Точка установлена как текущее местоположение", Toast.LENGTH_SHORT).show()
+                                    }
+                                } else null,
+                                onClose = {
+                                    if (candidatePoint != null) {
+                                        viewModel.clearCandidatePoint()
+                                    } else {
+                                        viewModel.clearSelectedWaypoint()
+                                    }
+                                }
+                            )
+                        }
+
+                        // Visibility check overlay: stays on the map so the ray remains visible.
+                        if (isLosActive || isPickingLosTarget || losResult != null) {
+                            VisibilityCheckOverlay(
+                                result = losResult,
+                                isPickingTarget = isPickingLosTarget,
+                                isCalculating = isCalculatingLos,
+                                hasTarget = losTarget != null,
+                                onCreateObstacleWaypoint = {
+                                    viewModel.createObstacleWaypoint()
+                                    Toast.makeText(context, "Точка на препятствии создана", Toast.LENGTH_SHORT).show()
+                                },
+                                onImportElevation = { showDataExchangeDialog = true },
+                                onOpenSettings = { showLosDialog = true },
+                                onClose = { viewModel.cancelVisibilityCheck() },
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                            )
+                        }
+
+                        // Active Route Builder Panel (when expanded)
+                        if (routeBuilderState.isActive && !isRouteBuilderMinimized) {
+                            RouteBuilderPanel(
+                                routeState = routeBuilderState,
+                                allWaypoints = waypoints,
+                                savedRoutes = routes,
+                                angleUnit = userPreferences.defaultAngleUnit,
+                                onToggleWaypoint = { viewModel.toggleWaypointInRoute(it) },
+                                onRouteNameChanged = { viewModel.setRouteName(it) },
+                                onSaveRoute = {
+                                    viewModel.saveCurrentRoute()
+                                    Toast.makeText(context, "Маршрут сохранен!", Toast.LENGTH_SHORT).show()
+                                },
+                                onLoadRoute = { viewModel.loadRouteIntoBuilder(it) },
+                                onShowProfile = { route ->
+                                    showRouteProfileFor = route
+                                    viewModel.calculateRouteProfile(route)
+                                },
+                                onDeleteRoute = {
+                                    viewModel.deleteRoute(it)
+                                    Toast.makeText(context, "Маршрут удалён", Toast.LENGTH_SHORT).show()
+                                },
+                                onCancel = {
+                                    isRouteBuilderMinimized = false
+                                    viewModel.cancelRouteBuilder()
+                                },
+                                isMinimized = false,
+                                onToggleMinimized = { isRouteBuilderMinimized = true }
+                            )
+                        }
+                    }
                 }
 
                 // Main Tactical Coordinate Bottom Bar
@@ -942,7 +952,7 @@ fun NavigationMainScreen(
             val showTriangulationBadge = triangulationState.rays.isNotEmpty() && !showTriangulationDialog
             if (showMinimizedRoute || showTriangulationBadge) {
                 val density = LocalDensity.current
-                val dynamicBottomPadding = with(density) { bottomPanelHeightPx.toDp() } + 8.dp
+                val dynamicBottomPadding = with(density) { extraContentHeightPx.toDp() } + COMPACT_COORD_BAR_HEIGHT + 8.dp
                 Column(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
