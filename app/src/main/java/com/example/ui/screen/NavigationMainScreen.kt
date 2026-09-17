@@ -187,10 +187,19 @@ fun NavigationMainScreen(
     ) { uri: Uri? ->
         if (uri != null) {
             try {
-                val displayName = getFileNameFromUri(context, uri)
-                val isMbtiles = displayName.lowercase().endsWith(".mbtiles")
+                val rawDisplayName = getFileNameFromUri(context, uri)
+                val isMbtiles = rawDisplayName.lowercase().endsWith(".mbtiles")
+                val safeDisplayName = sanitizeFileName(
+                    rawDisplayName,
+                    if (isMbtiles) "offline_map.mbtiles" else "imported_offline.orntpack"
+                )
                 val targetDir = if (isMbtiles) File(context.filesDir, "maps").apply { mkdirs() } else context.cacheDir
-                val tempFile = File(targetDir, displayName.ifBlank { if (isMbtiles) "offline_map.mbtiles" else "imported_offline.orntpack" })
+                val tempFile = File(targetDir, safeDisplayName)
+
+                if (!tempFile.canonicalPath.startsWith(targetDir.canonicalPath + File.separator)) {
+                    throw SecurityException("Небезопасный путь к файлу: $rawDisplayName")
+                }
+
                 context.contentResolver.openInputStream(uri)?.use { input ->
                     FileOutputStream(tempFile).use { output ->
                         input.copyTo(output)

@@ -82,14 +82,21 @@ fun DataExchangeDialog(
             coroutineScope.launch {
                 isProcessing = true
                 try {
-                    val displayName = queryDisplayName(context, uri)
-                    val temp = File(context.cacheDir, displayName.ifBlank { "elevation.hgt" })
+                    val rawDisplayName = queryDisplayName(context, uri)
+                    val safeDisplayName = sanitizeFileName(rawDisplayName, "elevation.hgt")
+                    val cacheDir = context.cacheDir
+                    val temp = File(cacheDir, safeDisplayName)
+
+                    if (!temp.canonicalPath.startsWith(cacheDir.canonicalPath + File.separator)) {
+                        throw SecurityException("Небезопасный путь к файлу: $rawDisplayName")
+                    }
+
                     withContext(Dispatchers.IO) {
                         context.contentResolver.openInputStream(uri)?.use { input ->
                             temp.outputStream().use { out -> input.copyTo(out) }
                         }
                     }
-                    val added = viewModel.importElevationFile(temp, displayName)
+                    val added = viewModel.importElevationFile(temp, safeDisplayName)
                     temp.delete()
                     Toast.makeText(
                         context,
@@ -113,14 +120,22 @@ fun DataExchangeDialog(
             coroutineScope.launch {
                 isProcessing = true
                 try {
-                    val fileName = getFileName(context, uri)
-                    val isMbtiles = fileName.lowercase().endsWith(".mbtiles")
+                    val rawFileName = getFileName(context, uri)
+                    val isMbtiles = rawFileName.lowercase().endsWith(".mbtiles")
+                    val safeFileName = sanitizeFileName(
+                        rawFileName,
+                        if (isMbtiles) "map.mbtiles" else "offline.orntpack"
+                    )
                     val targetDir = if (isMbtiles) {
                         File(context.filesDir, "maps").apply { mkdirs() }
                     } else {
                         File(context.filesDir, "packages").apply { mkdirs() }
                     }
-                    val targetFile = File(targetDir, fileName.ifBlank { if (isMbtiles) "map.mbtiles" else "offline.orntpack" })
+                    val targetFile = File(targetDir, safeFileName)
+
+                    if (!targetFile.canonicalPath.startsWith(targetDir.canonicalPath + File.separator)) {
+                        throw SecurityException("Небезопасный путь к файлу: $rawFileName")
+                    }
 
                     context.contentResolver.openInputStream(uri)?.use { input ->
                         FileOutputStream(targetFile).use { output ->
@@ -619,4 +634,11 @@ private fun queryDisplayName(context: Context, uri: Uri): String {
     } catch (_: Exception) {
     }
     return name ?: uri.lastPathSegment ?: ""
+}
+
+internal fun sanitizeFileName(raw: String, fallback: String): String {
+    val base = raw.substringAfterLast('/').substringAfterLast('\\')
+    val cleaned = base.replace(Regex("[^A-Za-z0-9._-]"), "_")
+    val trimmed = cleaned.trim('.', '_')
+    return trimmed.ifBlank { fallback }
 }
