@@ -26,7 +26,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -152,6 +154,7 @@ fun NavigationMainScreen(
     var showDataExchangeDialog by remember { mutableStateOf(false) }
     var showBatteryOptimizationDialog by remember { mutableStateOf(false) }
     var hasDismissedBatteryOptPrompt by remember { mutableStateOf(false) }
+    var bottomPanelHeightPx by remember { mutableStateOf(0) }
 
     // Location permission can be missing even when the system location toggle is on:
     // the OS switch and the per-app grant are separate things. Allow re-requesting it
@@ -811,6 +814,9 @@ fun NavigationMainScreen(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
+                    .onGloballyPositioned { coordinates ->
+                        bottomPanelHeightPx = coordinates.size.height
+                    }
             ) {
                 // Active Ruler Overlay or Selected Target (Candidate / Waypoint) Overlay
                 val isAnyLosActive = isLosActive || isPickingLosTarget || losResult != null
@@ -935,10 +941,12 @@ fun NavigationMainScreen(
             val showMinimizedRoute = routeBuilderState.isActive && isRouteBuilderMinimized
             val showTriangulationBadge = triangulationState.rays.isNotEmpty() && !showTriangulationDialog
             if (showMinimizedRoute || showTriangulationBadge) {
+                val density = LocalDensity.current
+                val dynamicBottomPadding = with(density) { bottomPanelHeightPx.toDp() } + 8.dp
                 Column(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
-                        .padding(end = 12.dp, bottom = 72.dp),
+                        .padding(end = 12.dp, bottom = dynamicBottomPadding),
                     horizontalAlignment = Alignment.End,
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
