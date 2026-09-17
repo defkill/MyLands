@@ -38,6 +38,7 @@ fun SavedWaypointsSheet(
     modifier: Modifier = Modifier
 ) {
     var searchQuery by remember { mutableStateOf("") }
+    var confirmDeleteWaypoint by remember { mutableStateOf<WaypointEntity?>(null) }
 
     val filteredWaypoints = remember(waypoints, searchQuery) {
         if (searchQuery.isBlank()) {
@@ -239,8 +240,8 @@ fun SavedWaypointsSheet(
 
                                 // Delete icon
                                 IconButton(
-                                    onClick = { onDeleteWaypoint(wp.id) },
-                                    modifier = Modifier.size(32.dp)
+                                    onClick = { confirmDeleteWaypoint = wp },
+                                    modifier = Modifier.size(32.dp).testTag("delete_waypoint_btn_${wp.id}")
                                 ) {
                                     Icon(
                                         Icons.Default.DeleteOutline,
@@ -255,5 +256,33 @@ fun SavedWaypointsSheet(
                 }
             }
         }
+    }
+
+    // Delete confirmation — waypoints cannot be recovered, so never delete on one tap.
+    confirmDeleteWaypoint?.let { wp ->
+        AlertDialog(
+            onDismissRequest = { confirmDeleteWaypoint = null },
+            containerColor = Color(0xFF161E28),
+            title = { Text("Удалить точку?", color = Color.White, fontSize = 15.sp) },
+            text = {
+                Text(
+                    "Точка «${wp.name}» будет удалена безвозвратно.",
+                    color = Color(0xFFB0BEC5),
+                    fontSize = 13.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onDeleteWaypoint(wp.id)
+                        confirmDeleteWaypoint = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC62828))
+                ) { Text("Удалить") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDeleteWaypoint = null }) { Text("Отмена", color = Color.Gray) }
+            }
+        )
     }
 }

@@ -7,11 +7,14 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
+import androidx.annotation.RequiresApi
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import com.example.MainActivity
 import com.example.map.DownloadProgress
 import com.example.map.RegionBounds
@@ -133,7 +136,17 @@ class MapDownloadService : Service() {
 
         cancelRequested = false
         _isRunning.value = true
-        startForeground(NOTIFICATION_ID, buildNotification("Подготовка…", 0, 0))
+        val notification = buildNotification("Подготовка…", 0, 0)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ServiceCompat.startForeground(
+                this,
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
         acquireWakeLock()
 
         serviceScope.launch {
@@ -234,6 +247,37 @@ class MapDownloadService : Service() {
         val text = "${progress.done} из ${progress.total} • ${progress.currentLayer}"
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.notify(NOTIFICATION_ID, buildNotification(text, progress.done, progress.total))
+    }
+
+    @RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
+    override fun onTimeout(startId: Int, foregroundServiceType: Int) {
+        super.onTimeout(startId, foregroundServiceType)
+        Log.w(TAG, "Map download foreground service timed out by system (type=$foregroundServiceType, startId=$startId)")
+        cancelRequested = true
+        _lastResult.value = RegionDownloader.Result(
+            _progress.value?.downloaded ?: 0,
+            _progress.value?.skipped ?: 0,
+            _progress.value?.failed ?: 0,
+            false,
+            true
+        )
+
+        // Inform the user via high-priority notification
+        val timeoutNotification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("Загрузка карты приостановлена")
+            .setContentText("Лимит фоновой работы исчерпан системой. Продолжите загрузку позже.")
+            .setSmallIcon(android.R.drawable.stat_sys_warning)
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .build()
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nm.notify(NOTIFICATION_ID + 1, timeoutNotification)
+
+        _isRunning.value = false
+        _progress.value = null
+        releaseWakeLock()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
 
     override fun onDestroy() {
