@@ -32,6 +32,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.geodesy.GeodesyEngine
 import com.example.map.MapTileType
@@ -103,6 +106,27 @@ fun NavigationMainScreen(
     val rulerState by viewModel.rulerState.collectAsStateWithLifecycle()
     val routeBuilderState by viewModel.routeBuilderState.collectAsStateWithLifecycle()
     val isCoordinateModalOpen by viewModel.isCoordinateModalOpen.collectAsStateWithLifecycle()
+    val isServiceRunning by viewModel.isTrackingServiceRunning.collectAsStateWithLifecycle()
+    val serviceRecordedPointsCount by viewModel.serviceRecordedPointsCount.collectAsStateWithLifecycle()
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_START -> {
+                    viewModel.resumeSensors()
+                }
+                Lifecycle.Event.ON_STOP -> {
+                    viewModel.pauseSensors()
+                }
+                else -> {}
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
 
     var showAddWaypointDialog by remember { mutableStateOf(false) }
     var isCoordinateBarCompact by remember { mutableStateOf(true) }
@@ -770,7 +794,7 @@ fun NavigationMainScreen(
                 }
 
                 // Track Recording (Start / Stop Foreground Service)
-                val isRecording = (activeTrack != null && activeTrack!!.isActive) || viewModel.isTrackingServiceRunning.collectAsStateWithLifecycle().value
+                val isRecording = (activeTrack != null && activeTrack!!.isActive) || isServiceRunning
                 FloatingActionButton(
                     onClick = { showTracksSheet = true },
                     modifier = Modifier.size(48.dp).testTag("track_recording_button"),
@@ -941,8 +965,7 @@ fun NavigationMainScreen(
 
     // Recorded Tracks Bottom Sheet
     if (showTracksSheet) {
-        val isRecordingNow = (activeTrack != null && activeTrack!!.isActive) ||
-            viewModel.isTrackingServiceRunning.collectAsStateWithLifecycle().value
+        val isRecordingNow = (activeTrack != null && activeTrack!!.isActive) || isServiceRunning
         val exportScope = rememberCoroutineScope()
 
         ModalBottomSheet(
@@ -954,8 +977,8 @@ fun NavigationMainScreen(
                 visibleTrackIds = visibleTrackIds,
                 isRecording = isRecordingNow,
                 showRawTracks = showRawTracks,
-                serviceRunning = viewModel.isTrackingServiceRunning.collectAsStateWithLifecycle().value,
-                servicePointCount = viewModel.serviceRecordedPointsCount.collectAsStateWithLifecycle().value,
+                serviceRunning = isServiceRunning,
+                servicePointCount = serviceRecordedPointsCount,
                 hasWakeUpStepSensor = viewModel.stepDetectorManager.hasWakeUpStepSensor,
                 hasActivityPermission = viewModel.stepDetectorManager.hasActivityRecognitionPermission(),
                 onToggleRawTracks = { viewModel.toggleRawTracks() },

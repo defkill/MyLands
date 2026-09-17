@@ -308,4 +308,88 @@ class TrackingServiceBackgroundTest {
         serviceController.destroy()
         assertFalse(TrackingService.isServiceRunning.value)
     }
+
+    @Test
+    fun `test real TrackingService GPS and PDR fusion during signal loss and singleton sensor verification`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val database = AppDatabase.getInstance(context)
+        val trackDao = database.trackDao()
+
+        val trackId = trackDao.insertTrack(
+            TrackEntity(
+                name = "Интеграционный PDR Тест",
+                startTime = System.currentTimeMillis(),
+                isActive = true
+            )
+        )
+
+        val locationTracker = com.example.sensor.LocationTracker.getInstance(context)
+        val orientationManager = com.example.sensor.OrientationManager.getInstance(context)
+        val stepDetectorManager = com.example.sensor.StepDetectorManager.getInstance(context)
+
+        // Verify singleton behavior
+        assertSame(locationTracker, com.example.sensor.LocationTracker.getInstance(context))
+        assertSame(orientationManager, com.example.sensor.OrientationManager.getInstance(context))
+        assertSame(stepDetectorManager, com.example.sensor.StepDetectorManager.getInstance(context))
+
+        val startIntent = Intent(context, TrackingService::class.java).apply {
+            action = TrackingService.ACTION_START_TRACKING
+            putExtra(TrackingService.EXTRA_TRACK_ID, trackId)
+            putExtra(TrackingService.EXTRA_TRACK_NAME, "Интеграционный PDR Тест")
+        }
+
+        val serviceController = Robolectric.buildService(TrackingService::class.java, startIntent)
+        val service = serviceController.create().startCommand(0, 1).get()
+
+        assertTrue(TrackingService.isServiceRunning.value)
+
+        val baseLat = 50.4501
+        val baseLon = 30.5234
+        var time = System.currentTimeMillis()
+        orientationManager.setHeadingForTest(45f, time)
+
+        // 1. Initial GPS Fix (anchor point)
+        val loc1 = android.location.Location(android.location.LocationManager.GPS_PROVIDER).apply {
+            latitude = baseLat
+            longitude = baseLon
+            altitude = 150.0
+            accuracy = 3.5f
+            speed = 1.2f
+            bearing = 45f
+            this.time = time
+        }
+        locationTracker.onLocationChanged(loc1)
+
+        // 2. Simulate GPS signal loss & synthetic walking steps (PDR)
+        stepDetectorManager.updateGpsAnchor(com.example.model.GeoPoint(baseLat, baseLon, 150.0), time, 45f)
+        for (step in 1..10) {
+            time += 700L
+            orientationManager.setHeadingForTest(45f, time)
+            stepDetectorManager.simulateStep(headingDeg = 45f, timestamp = time)
+        }
+
+        // Check that accumulated displacement was computed and flush produces a valid displacement point
+        val flushed = stepDetectorManager.flush(time, com.example.sensor.PdrFlushReason.GPS_REACQUIRED)
+        assertNotNull(flushed)
+        assertTrue(flushed!!.displacementMeters > 5.0)
+
+        val pdrState = stepDetectorManager.pdrState.value
+        assertTrue(pdrState.totalSteps >= 10)
+        assertNotNull(pdrState.lastEstimatedPosition)
+
+        // 3. Re-acquire GPS
+        val loc2 = android.location.Location(android.location.LocationManager.GPS_PROVIDER).apply {
+            latitude = baseLat + 0.0003
+            longitude = baseLon + 0.0003
+            altitude = 152.0
+            accuracy = 4.0f
+            speed = 1.3f
+            bearing = 45f
+            this.time = time + 1000L
+        }
+        locationTracker.onLocationChanged(loc2)
+
+        serviceController.destroy()
+        assertFalse(TrackingService.isServiceRunning.value)
+    }
 }

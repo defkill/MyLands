@@ -62,4 +62,36 @@ class GpxKmlServiceTest {
         assertEquals("Kml Route", imported.routes[0].first)
         assertEquals(2, imported.routes[0].second.size)
     }
+
+    @Test
+    fun testGpxImport_PreventsXxe() {
+        val maliciousGpx = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE gpx [
+              <!ENTITY xxe SYSTEM "file:///etc/hostname">
+            ]>
+            <gpx version="1.1" creator="Malicious">
+              <wpt lat="50.45" lon="30.52">
+                <name>&xxe;</name>
+                <desc>Test Description</desc>
+              </wpt>
+            </gpx>
+        """.trimIndent()
+
+        val stream = ByteArrayInputStream(maliciousGpx.toByteArray(Charsets.UTF_8))
+        try {
+            val result = GpxKmlService.importGpx(stream)
+            // If parser didn't throw due to disallow-doctype-decl, verify entity was NOT expanded with external file content
+            for (wp in result.waypoints) {
+                assertNotEquals("Should not contain file content", "localhost", wp.name)
+                assertFalse("Entity references should not be expanded to external content", wp.name.contains("hostname"))
+            }
+        } catch (e: Exception) {
+            // Safely rejected due to disallow-doctype-decl or prohibited external entities
+            assertTrue(
+                "Exception should be a secure XML parse error",
+                e.message?.contains("DOCTYPE") == true || e.message?.contains("disallowed") == true || e is org.xml.sax.SAXParseException
+            )
+        }
+    }
 }

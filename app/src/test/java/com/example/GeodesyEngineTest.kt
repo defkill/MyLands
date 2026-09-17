@@ -184,4 +184,40 @@ class GeodesyEngineTest {
         val divergeResult = GeodesyEngine.intersectTwoAzimuths(p1, 225.0, p2, 135.0)
         assertTrue("Should detect diverging rays", divergeResult is IntersectionResult.RaysDiverge)
     }
+
+    @Test
+    fun testTwoRayIntersection_WrapAroundAzimuthDiff() {
+        val p1 = GeoPoint(50.0, 30.0)
+        val p2 = GeoPoint(50.0, 30.2)
+
+        // Pair (1.0, 359.0): across North (0°/360° boundary), azDiff is 2.0° (> 0.2° threshold)
+        // Rays converge far to the North
+        val result = GeodesyEngine.intersectTwoAzimuths(p1, 1.0, p2, 359.0)
+        assertTrue("Azimuths 1.0 and 359.0 should intersect", result is IntersectionResult.Success)
+        val success = result as IntersectionResult.Success
+        assertTrue("Intersection must be north of 50.0", success.intersectionPoint.latitude > 50.0)
+        assertEquals(30.1, success.intersectionPoint.longitude, 0.01)
+
+        // Near parallel across North boundary (0.05°, 359.95°): azDiff = 0.1° < 0.2°
+        val nearParallelResult = GeodesyEngine.intersectTwoAzimuths(p1, 0.05, p2, 359.95)
+        assertTrue("Near parallel rays across 0/360 should be parallel", nearParallelResult is IntersectionResult.RaysParallel)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun testGaussKruger_InverseAmbiguousZoneThrows() {
+        // Y coordinate has no 7-digit zone prefix and zoneInput is null
+        GaussKrugerConverter.inverse(5593124.0, 324512.0, zoneInput = null)
+    }
+
+    @Test
+    fun testGaussKruger_InverseWithExplicitOrPrefixedZone() {
+        // Explicit zoneInput works with 6-digit Y
+        val (lat1, lon1) = GaussKrugerConverter.inverse(5593124.0, 324512.0, zoneInput = 6)
+        assertTrue(lat1 in 50.0..51.0)
+
+        // Prefixed 7-digit Y automatically extracts zone 6
+        val (lat2, lon2) = GaussKrugerConverter.inverse(5593124.0, 6324512.0, zoneInput = null)
+        assertEquals(lat1, lat2, 0.000001)
+        assertEquals(lon1, lon2, 0.000001)
+    }
 }

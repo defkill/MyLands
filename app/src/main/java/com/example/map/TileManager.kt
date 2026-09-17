@@ -32,6 +32,8 @@ class TileManager(private val context: Context) {
         }
     }
 
+    private val fallbackCache = LruCache<String, Bitmap>(64)
+
     companion object {
         /**
          * Must identify this specific application. OSM blocks generic/faked agents.
@@ -308,6 +310,9 @@ class TileManager(private val context: Context) {
      * Creates a fallback grid tile with coordinates when completely offline and no cached tile.
      */
     fun createGridFallbackTile(tile: TileCoordinate): Bitmap {
+        val cacheKey = "${tile.zoom}/${tile.x}/${tile.y}"
+        fallbackCache.get(cacheKey)?.let { return it }
+
         val bmp = Bitmap.createBitmap(256, 256, Bitmap.Config.RGB_565)
         val canvas = Canvas(bmp)
         canvas.drawColor(Color.rgb(24, 28, 32)) // Tactical dark
@@ -325,6 +330,7 @@ class TileManager(private val context: Context) {
             isAntiAlias = true
         }
         canvas.drawText("Z${tile.zoom}: ${tile.x}/${tile.y}", 20f, 40f, textPaint)
+        fallbackCache.put(cacheKey, bmp)
         return bmp
     }
 
@@ -364,6 +370,7 @@ class TileManager(private val context: Context) {
 
     fun clearMemoryCache() {
         memoryCache.evictAll()
+        fallbackCache.evictAll()
     }
 
     /**

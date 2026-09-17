@@ -53,9 +53,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val tileManager = TileManager(application)
     val settlementRepository = com.example.data.settlement.SettlementRepository(application)
 
-    val locationTracker = LocationTracker(application)
-    val orientationManager = OrientationManager(application)
-    val stepDetectorManager = StepDetectorManager(application)
+    val locationTracker = LocationTracker.getInstance(application)
+    val orientationManager = OrientationManager.getInstance(application)
+    val stepDetectorManager = StepDetectorManager.getInstance(application)
 
     // UI & Navigation State
     val waypoints: StateFlow<List<WaypointEntity>> = repository.allWaypoints
@@ -322,9 +322,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // Persist dead-reckoning points. TrackingService does this in the background, but when
         // it is not the one recording, nothing was writing them at all: switching GPS off mid
         // track produced a straight line across the whole blind section instead of the path.
-        stepDetectorManager.onStepFlushed = { flushed ->
+        stepDetectorManager.addOnStepFlushedListener { flushed ->
             viewModelScope.launch(Dispatchers.IO) {
-                if (isTrackingServiceRunning.value && serviceRecordedPointsCount.value > 0) {
+                if (isTrackingServiceRunning.value) {
                     return@launch
                 }
                 val track = activeTrack.value ?: return@launch
@@ -446,9 +446,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         super.onCleared()
-        orientationManager.stop()
-        locationTracker.stopListening()
-        stepDetectorManager.stop()
+        pauseSensors()
     }
 
     // --- Map Actions ---
@@ -1366,5 +1364,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // --- Offline Pack (.orntpack) Packing ---
     suspend fun packCurrentCache(outputFile: java.io.File): Int = withContext(Dispatchers.IO) {
         tileManager.packCacheToOrntpack(outputFile)
+    }
+
+    fun resumeSensors() {
+        orientationManager.start()
+        locationTracker.startListening()
+        stepDetectorManager.start()
+    }
+
+    fun pauseSensors() {
+        if (!TrackingService.isServiceRunning.value) {
+            locationTracker.stopListening()
+            orientationManager.stop()
+            stepDetectorManager.stop()
+        }
     }
 }

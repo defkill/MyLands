@@ -22,6 +22,16 @@ data class OrientationData(
 
 class OrientationManager(private val context: Context) : SensorEventListener {
 
+    companion object {
+        @Volatile
+        private var instance: OrientationManager? = null
+
+        fun getInstance(context: Context): OrientationManager =
+            instance ?: synchronized(this) {
+                instance ?: OrientationManager(context.applicationContext).also { instance = it }
+            }
+    }
+
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
     /**
      * Prefer the wake-up rotation vector so heading keeps updating with the screen off.
@@ -36,6 +46,9 @@ class OrientationManager(private val context: Context) : SensorEventListener {
     private val accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
     private val magnetometer = sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
 
+    @Volatile
+    private var isListening = false
+
     /** Timestamp of the last orientation update, to detect a frozen heading. */
     @Volatile
     var lastUpdateTimestamp: Long = 0L
@@ -45,6 +58,14 @@ class OrientationManager(private val context: Context) : SensorEventListener {
     fun headingAgeMillis(): Long =
         if (lastUpdateTimestamp == 0L) Long.MAX_VALUE
         else System.currentTimeMillis() - lastUpdateTimestamp
+
+    fun setHeadingForTest(trueHeading: Float, timestamp: Long = System.currentTimeMillis()) {
+        lastUpdateTimestamp = timestamp
+        _orientationData.value = OrientationData(
+            magneticHeadingDeg = trueHeading,
+            trueHeadingDeg = trueHeading
+        )
+    }
 
     private val _orientationData = MutableStateFlow(OrientationData())
     val orientationData: StateFlow<OrientationData> = _orientationData.asStateFlow()
@@ -78,16 +99,24 @@ class OrientationManager(private val context: Context) : SensorEventListener {
     }
 
     fun start() {
-        if (rotationVectorSensor != null) {
-            sensorManager.registerListener(this, rotationVectorSensor, SensorManager.SENSOR_DELAY_UI)
-        } else {
-            accelerometer?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI) }
-            magnetometer?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI) }
+        synchronized(this) {
+            if (isListening) return
+            isListening = true
+            if (rotationVectorSensor != null) {
+                sensorManager.registerListener(this, rotationVectorSensor, SensorManager.SENSOR_DELAY_UI)
+            } else {
+                accelerometer?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI) }
+                magnetometer?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI) }
+            }
         }
     }
 
     fun stop() {
-        sensorManager.unregisterListener(this)
+        synchronized(this) {
+            if (!isListening) return
+            isListening = false
+            sensorManager.unregisterListener(this)
+        }
     }
 
     override fun onSensorChanged(event: SensorEvent?) {

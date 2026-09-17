@@ -215,7 +215,8 @@ object GeodesyEngine {
         // det = sin1 * (-cos2) - (-sin2) * cos1 = sin2 * cos1 - cos2 * sin1 = sin(a2 - a1) = -sin(a1 - a2)
         val det = sin2 * cos1 - cos2 * sin1
 
-        val azDiff = abs((azimuth1Deg - azimuth2Deg + 360.0) % 360.0)
+        val diff = abs(azimuth1Deg - azimuth2Deg) % 360.0
+        val azDiff = if (diff > 180.0) 360.0 - diff else diff
         if (azDiff < 0.2 || abs(azDiff - 180.0) < 0.2 || abs(det) < 0.005) {
             return IntersectionResult.RaysParallel()
         }
@@ -256,8 +257,7 @@ object GeodesyEngine {
      * Converts USK-2000 coordinates (Northing X, Easting Y, and optional 3° zone) to WGS84 GeoPoint.
      */
     fun usk2000ToWgs84(x: Double, y: Double, zoneInput: Int? = null): GeoPoint {
-        val effectiveZone = zoneInput ?: GaussKrugerConverter.extractZone(y) ?: 10
-        val (uskLat, uskLon) = GaussKrugerConverter.inverse(x, y, zoneInput = effectiveZone, zoneWidth = 3)
+        val (uskLat, uskLon) = GaussKrugerConverter.inverse(x, y, zoneInput = zoneInput, zoneWidth = 3)
         val (wgsLat, wgsLon, _) = DatumTransform.usk2000ToWgs84(uskLat, uskLon)
         return GeoPoint(wgsLat, wgsLon)
     }
@@ -266,8 +266,7 @@ object GeodesyEngine {
      * Converts SK-42 / Gauss-Kruger coordinates (Northing X, Easting Y, and optional 6° zone) to WGS84 GeoPoint.
      */
     fun gaussKrugerToWgs84(x: Double, y: Double, zoneInput: Int? = null): GeoPoint {
-        val effectiveZone = zoneInput ?: GaussKrugerConverter.extractZone(y) ?: 6
-        val (skLat, skLon) = GaussKrugerConverter.inverse(x, y, zoneInput = effectiveZone, zoneWidth = 6)
+        val (skLat, skLon) = GaussKrugerConverter.inverse(x, y, zoneInput = zoneInput, zoneWidth = 6)
         val (wgsLat, wgsLon, _) = DatumTransform.sk42ToWgs84(skLat, skLon)
         return GeoPoint(wgsLat, wgsLon)
     }

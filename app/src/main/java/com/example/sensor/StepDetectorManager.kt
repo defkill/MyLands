@@ -67,6 +67,11 @@ class StepDetectorManager(
 ) : SensorEventListener {
 
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
+
+    @Volatile
+    private var isListening = false
+
+    private val flushListeners = java.util.concurrent.CopyOnWriteArrayList<(FlushedPdrPoint) -> Unit>()
     /**
      * Wake-up step detector if the device has one.
      *
@@ -208,6 +213,16 @@ class StepDetectorManager(
     var onStepDetected: ((point: GeoPoint?, headingDeg: Float) -> Unit)? = null
     var onStepFlushed: ((FlushedPdrPoint) -> Unit)? = null
 
+    fun addOnStepFlushedListener(listener: (FlushedPdrPoint) -> Unit) {
+        if (!flushListeners.contains(listener)) {
+            flushListeners.add(listener)
+        }
+    }
+
+    fun removeOnStepFlushedListener(listener: (FlushedPdrPoint) -> Unit) {
+        flushListeners.remove(listener)
+    }
+
     // Fallback step detector using accelerometer peak detection
     private var lastAccMagnitude = 9.8f
     private var isPeak = false
@@ -218,17 +233,23 @@ class StepDetectorManager(
     val currentAnchor: GeoPoint? get() = anchorPosition
 
     fun start(initialPosition: GeoPoint? = null) {
-        anchorPosition = initialPosition
-        Log.d(
-            TAG,
-            "Starting PDR: stepSensor=${stepSensor?.name ?: "none"}, wakeUp=$hasWakeUpStepSensor"
-        )
-        if (stepSensor != null) {
-            sensorManager.registerListener(this, stepSensor, SensorManager.SENSOR_DELAY_FASTEST)
-        } else {
-            // Fallback to accelerometer
-            accelerometer?.let {
-                sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
+        synchronized(this) {
+            if (initialPosition != null) {
+                anchorPosition = initialPosition
+            }
+            if (isListening) return
+            isListening = true
+            Log.d(
+                TAG,
+                "Starting PDR: stepSensor=${stepSensor?.name ?: "none"}, wakeUp=$hasWakeUpStepSensor"
+            )
+            if (stepSensor != null) {
+                sensorManager.registerListener(this, stepSensor, SensorManager.SENSOR_DELAY_FASTEST)
+            } else {
+                // Fallback to accelerometer
+                accelerometer?.let {
+                    sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
+                }
             }
         }
     }
@@ -239,13 +260,20 @@ class StepDetectorManager(
      * once we subscribe again with the permission in place.
      */
     fun restart() {
-        val keepAnchor = anchorPosition
-        sensorManager.unregisterListener(this)
-        start(keepAnchor)
+        synchronized(this) {
+            val keepAnchor = anchorPosition
+            isListening = false
+            sensorManager.unregisterListener(this)
+            start(keepAnchor)
+        }
     }
 
     fun stop() {
-        sensorManager.unregisterListener(this)
+        synchronized(this) {
+            if (!isListening) return
+            isListening = false
+            sensorManager.unregisterListener(this)
+        }
     }
 
     /**
@@ -433,6 +461,11 @@ class StepDetectorManager(
         )
 
         onStepFlushed?.invoke(result)
+        for (listener in flushListeners) {
+            try {
+                listener(result)
+            } catch (_: Exception) {}
+        }
         return result
     }
 
@@ -484,6 +517,14 @@ class StepDetectorManager(
 
     companion object {
         private const val TAG = "StepDetectorManager"
+
+        @Volatile
+        private var instance: StepDetectorManager? = null
+
+        fun getInstance(context: Context): StepDetectorManager =
+            instance ?: synchronized(this) {
+                instance ?: StepDetectorManager(context.applicationContext).also { instance = it }
+            }
 
         /** How many offset samples the running average keeps. */
         const val HEADING_OFFSET_WINDOW = 40

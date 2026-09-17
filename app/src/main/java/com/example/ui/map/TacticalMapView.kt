@@ -68,7 +68,6 @@ fun TacticalMapView(
     modifier: Modifier = Modifier
 ) {
     val coroutineScope = rememberCoroutineScope()
-    var canvasSize by remember { mutableStateOf(Pair(1080f, 1920f)) }
 
     // Redraw trigger when tiles finish loading asynchronously
     var tileRefreshTrigger by remember { mutableStateOf(0) }
@@ -241,7 +240,6 @@ fun TacticalMapView(
     ) {
         val width = size.width
         val height = size.height
-        canvasSize = Pair(width, height)
 
         // Reading the trigger inside the draw scope makes this Canvas redraw
         // whenever an async tile finishes loading.

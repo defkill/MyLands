@@ -159,12 +159,23 @@ object GpxKmlService {
         return sb.toString()
     }
 
+    private fun createSafeDocumentBuilderFactory(): DocumentBuilderFactory {
+        val factory = DocumentBuilderFactory.newInstance()
+        factory.isNamespaceAware = false
+        factory.isXIncludeAware = false
+        factory.isExpandEntityReferences = false
+        try { factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true) } catch (_: Exception) {}
+        try { factory.setFeature("http://xml.org/sax/features/external-general-entities", false) } catch (_: Exception) {}
+        try { factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false) } catch (_: Exception) {}
+        try { factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false) } catch (_: Exception) {}
+        return factory
+    }
+
     // ==========================================
     // IMPORT GPX
     // ==========================================
     fun importGpx(inputStream: InputStream): ImportedNavigationData {
-        val factory = DocumentBuilderFactory.newInstance()
-        factory.isNamespaceAware = false
+        val factory = createSafeDocumentBuilderFactory()
         val builder = factory.newDocumentBuilder()
         val doc = builder.parse(inputStream)
 
@@ -224,8 +235,7 @@ object GpxKmlService {
     // IMPORT KML
     // ==========================================
     fun importKml(inputStream: InputStream): ImportedNavigationData {
-        val factory = DocumentBuilderFactory.newInstance()
-        factory.isNamespaceAware = false
+        val factory = createSafeDocumentBuilderFactory()
         val builder = factory.newDocumentBuilder()
         val doc = builder.parse(inputStream)
 

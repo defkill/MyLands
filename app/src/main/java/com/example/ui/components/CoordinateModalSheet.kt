@@ -391,6 +391,12 @@ fun CoordinateModalSheet(
                                 }
                                 else -> {}
                             }
+                        } catch (e: IllegalArgumentException) {
+                            if (e.message?.contains("zone is ambiguous", ignoreCase = true) == true) {
+                                inputError = "Укажите номер зоны (координата Y без номера зоны)"
+                            } else {
+                                inputError = e.message ?: "Неверный формат координат"
+                            }
                         } catch (e: Exception) {
                             inputError = "Ошибка распознавания: ${e.message}"
                         }

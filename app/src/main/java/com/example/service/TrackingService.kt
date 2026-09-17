@@ -22,6 +22,7 @@ import com.example.data.AppDatabase
 import com.example.data.entity.TrackEntity
 import com.example.data.entity.TrackPointEntity
 import com.example.model.GeoPoint
+import com.example.sensor.FlushedPdrPoint
 import com.example.sensor.GpsStatus
 import com.example.data.track.TrackFilter
 import com.example.geodesy.GeodesyEngine
@@ -103,14 +104,52 @@ class TrackingService : Service() {
     private var currentTrackName: String = "Трек"
     private var lastGpsTimestamp: Long = 0L
 
-    /** Last GPS fix trusted enough to anchor dead reckoning on. */
     private var lastGoodFix: GeoPoint? = null
+
+    private val pdrFlushListener: (FlushedPdrPoint) -> Unit = { flushed ->
+        if (currentTrackId > 0L) {
+            val now = flushed.timestamp
+            val timeSinceGps = now - lastGpsTimestamp
+            val isGpsActive = locationTracker.gpsStatus.value == GpsStatus.ACTIVE
+
+            // Only record PDR points if GPS is unavailable or stale (> 3.5s)
+            if (!isGpsActive || timeSinceGps > 3500L) {
+                serviceScope.launch(Dispatchers.IO) {
+                    acquireBriefWakeLock(3000L)
+                    try {
+                        val pt = TrackPointEntity(
+                            trackId = currentTrackId,
+                            latitude = flushed.point.latitude,
+                            longitude = flushed.point.longitude,
+                            altitudeMeters = flushed.point.altitude,
+                            source = TrackPointEntity.SOURCE_DEAD_RECKONING,
+                            headingDegrees = flushed.headingDeg,
+                            speedMps = 1.2f,
+                            accuracyMeters = 15.0f,
+                            timestamp = flushed.timestamp
+                        )
+                        trackDao.insertPoint(pt)
+                        val count = _recordedPointsCount.value + 1
+                        _recordedPointsCount.value = count
+                        _lastRecordedPoint.value = pt
+
+                        if (count % 5 == 0) {
+                            updateNotification(currentTrackName, count)
+                        }
+                    } catch (_: Exception) {
+                    } finally {
+                        releaseBriefWakeLock()
+                    }
+                }
+            }
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
-        locationTracker = LocationTracker(applicationContext)
-        orientationManager = OrientationManager(applicationContext)
-        stepDetectorManager = StepDetectorManager(applicationContext)
+        locationTracker = LocationTracker.getInstance(applicationContext)
+        orientationManager = OrientationManager.getInstance(applicationContext)
+        stepDetectorManager = StepDetectorManager.getInstance(applicationContext)
 
         createNotificationChannel()
     }
@@ -324,44 +363,7 @@ class TrackingService : Service() {
         // 1. Accumulated displacement > 15-20 m (default 18.0 m)
         // 2. Course changed > 20-30° (default 25.0°) relative to heading at last recording
         // 3. 60 seconds elapsed without criteria 1 or 2 triggering
-        stepDetectorManager.onStepFlushed = { flushed ->
-            if (currentTrackId > 0L) {
-                val now = flushed.timestamp
-                val timeSinceGps = now - lastGpsTimestamp
-                val isGpsActive = locationTracker.gpsStatus.value == GpsStatus.ACTIVE
-
-                // Only record PDR points if GPS is unavailable or stale (> 3.5s)
-                if (!isGpsActive || timeSinceGps > 3500L) {
-                    serviceScope.launch(Dispatchers.IO) {
-                        acquireBriefWakeLock(3000L)
-                        try {
-                            val pt = TrackPointEntity(
-                                trackId = currentTrackId,
-                                latitude = flushed.point.latitude,
-                                longitude = flushed.point.longitude,
-                                altitudeMeters = flushed.point.altitude,
-                                source = TrackPointEntity.SOURCE_DEAD_RECKONING,
-                                headingDegrees = flushed.headingDeg,
-                                speedMps = 1.2f, // standard pedestrian pace
-                                accuracyMeters = 15.0f,
-                                timestamp = now
-                            )
-                            trackDao.insertPoint(pt)
-
-                            val count = _recordedPointsCount.value + 1
-                            _recordedPointsCount.value = count
-                            _lastRecordedPoint.value = pt
-
-                            if (count % 5 == 0) {
-                                updateNotification(currentTrackName, count)
-                            }
-                        } finally {
-                            releaseBriefWakeLock()
-                        }
-                    }
-                }
-            }
-        }
+        stepDetectorManager.addOnStepFlushedListener(pdrFlushListener)
 
         // 4. Hardware RTC AlarmManager checkpoint for Criterion 3 (60s timeout).
         // Uses AlarmManager.setExactAndAllowWhileIdle so the device is guaranteed to wake
@@ -603,6 +605,7 @@ class TrackingService : Service() {
         releaseBriefWakeLock()
         releaseSustainedWakeLock()
         try {
+            stepDetectorManager.removeOnStepFlushedListener(pdrFlushListener)
             locationTracker.stopListening()
             orientationManager.stop()
             stepDetectorManager.stop()

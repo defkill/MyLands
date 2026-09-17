@@ -152,8 +152,13 @@ object GaussKrugerConverter {
         zoneInput: Int? = null,
         zoneWidth: Int = 6
     ): Pair<Double, Double> {
-        val guessedZone = if (y >= 1_000_000.0) (y / 1_000_000.0).toInt() else (zoneInput ?: 1)
-        val zone = zoneInput ?: guessedZone
+        val zone = if (zoneInput != null) {
+            zoneInput
+        } else if (y >= 1_000_000.0) {
+            (y / 1_000_000.0).toInt()
+        } else {
+            throw IllegalArgumentException("GaussKruger inverse: zone is ambiguous — Y has no zone prefix and zoneInput was not provided")
+        }
         val l0Deg = if (zoneWidth == 3) getCentralMeridian3(zone) else getCentralMeridian6(zone)
 
         val falseEasting = (zone * 1_000_000.0) + 500_000.0

@@ -26,12 +26,20 @@ enum class GpsStatus(val label: String) {
 
 class LocationTracker(private val context: Context) : LocationListener {
 
-    private companion object {
+    companion object {
         const val TAG = "LocationTracker"
         const val GPS_MIN_INTERVAL_MS = 1000L
         const val GPS_MIN_DISTANCE_M = 1.0f
         const val NETWORK_MIN_INTERVAL_MS = 2000L
         const val NETWORK_MIN_DISTANCE_M = 5.0f
+
+        @Volatile
+        private var instance: LocationTracker? = null
+
+        fun getInstance(context: Context): LocationTracker =
+            instance ?: synchronized(this) {
+                instance ?: LocationTracker(context.applicationContext).also { instance = it }
+            }
     }
 
     private val locationManager =
