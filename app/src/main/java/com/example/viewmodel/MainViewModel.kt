@@ -1042,12 +1042,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         } else {
             _candidatePoint.value = null
             _selectedWaypoint.value = null
-            // Mutually deactivate other active tools to prevent touch conflicts on map
+            // Mutually deactivate triangulation tool to prevent touch conflicts on map
             if (_triangulationState.value.isActive) {
                 cancelTriangulation()
-            }
-            if (_routeBuilderState.value.isActive) {
-                cancelRouteBuilder()
             }
             val start = gpsLocation.value ?: _mapCenter.value
             _rulerState.value = RulerState(isActive = true, startPoint = start, endPoint = start)
@@ -1162,9 +1159,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (_rulerState.value.isActive) {
             toggleRuler()
         }
-        if (_routeBuilderState.value.isActive) {
-            cancelRouteBuilder()
-        }
         val current = _triangulationState.value
         _triangulationState.value = current.copy(isActive = true)
     }
@@ -1263,7 +1257,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (_triangulationState.value.isActive) {
             cancelTriangulation()
         }
-        _routeBuilderState.value = RouteBuilderState(isActive = true, routeName = initialName)
+        val current = _routeBuilderState.value
+        _routeBuilderState.value = if (current.isActive) {
+            current
+        } else {
+            RouteBuilderState(isActive = true, routeName = initialName)
+        }
     }
 
     fun toggleWaypointInRoute(wp: WaypointEntity) {

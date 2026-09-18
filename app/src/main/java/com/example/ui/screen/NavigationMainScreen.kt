@@ -97,6 +97,7 @@ fun NavigationMainScreen(
 
     val manualPositionOverride by viewModel.manualPositionOverride.collectAsStateWithLifecycle()
     var isRouteBuilderMinimized by remember { mutableStateOf(false) }
+    var isLosMinimized by remember { mutableStateOf(false) }
 
     // Best available position: a live fix when there is one, otherwise the step-counted
     // estimate, or manual position override. Bearings and distances to waypoints stay useful with GPS switched off,
@@ -294,12 +295,15 @@ fun NavigationMainScreen(
                 candidatePoint = candidatePoint,
                 activeMapTool = activeMapTool,
                 onMapTapped = { pt ->
-                    if (routeBuilderState.isActive && !isRouteBuilderMinimized) {
-                        isRouteBuilderMinimized = true
-                    } else if (isPickingLosTarget) {
-                        viewModel.pickLosTarget(pt)
-                    } else {
-                        viewModel.onMapTapped(pt)
+                    when {
+                        isPickingLosTarget -> viewModel.pickLosTarget(pt)
+                        (isLosActive || losResult != null) && !isLosMinimized -> {
+                            isLosMinimized = true
+                        }
+                        routeBuilderState.isActive && !isRouteBuilderMinimized -> {
+                            isRouteBuilderMinimized = true
+                        }
+                        else -> viewModel.onMapTapped(pt)
                     }
                 },
                 rulerState = rulerState,
@@ -765,7 +769,10 @@ fun NavigationMainScreen(
 
                 // Ruler Tool Toggle
                 FloatingActionButton(
-                    onClick = { viewModel.toggleRuler() },
+                    onClick = {
+                        viewModel.toggleRuler()
+                        isRouteBuilderMinimized = true
+                    },
                     modifier = Modifier.size(48.dp).testTag("ruler_tool_button"),
                     containerColor = if (rulerState.isActive) Color(0xFFF57F17) else Color(0xFF263238),
                     contentColor = Color.White
@@ -776,10 +783,11 @@ fun NavigationMainScreen(
                 // Route Builder Tool Toggle ("Построение маршрута по точкам")
                 FloatingActionButton(
                     onClick = {
-                        if (routeBuilderState.isActive) {
+                        if (routeBuilderState.isActive && !isRouteBuilderMinimized) {
                             viewModel.cancelRouteBuilder()
                         } else {
                             viewModel.startRouteBuilder()
+                            isRouteBuilderMinimized = false
                         }
                     },
                     modifier = Modifier.size(48.dp).testTag("route_builder_button"),
@@ -873,7 +881,7 @@ fun NavigationMainScreen(
                         }
 
                         // Visibility check overlay: stays on the map so the ray remains visible.
-                        if (isLosActive || isPickingLosTarget || losResult != null) {
+                        if ((isLosActive || isPickingLosTarget || losResult != null) && !isLosMinimized) {
                             VisibilityCheckOverlay(
                                 result = losResult,
                                 isPickingTarget = isPickingLosTarget,
@@ -885,7 +893,10 @@ fun NavigationMainScreen(
                                 },
                                 onImportElevation = { showDataExchangeDialog = true },
                                 onOpenSettings = { showLosDialog = true },
-                                onClose = { viewModel.cancelVisibilityCheck() },
+                                onClose = {
+                                    isLosMinimized = false
+                                    viewModel.cancelVisibilityCheck()
+                                },
                                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
                             )
                         }
@@ -938,10 +949,11 @@ fun NavigationMainScreen(
                 )
             }
 
-            // 5. Bottom-Right Floating Badges (Active Triangulation & Minimized Route Builder)
+            // 5. Bottom-Right Floating Badges (Active Triangulation & Minimized Route Builder & Minimized LoS)
             val showMinimizedRoute = routeBuilderState.isActive && isRouteBuilderMinimized
+            val showMinimizedLos = (isLosActive || losResult != null) && isLosMinimized
             val showTriangulationBadge = triangulationState.rays.isNotEmpty() && !showTriangulationDialog
-            if (showMinimizedRoute || showTriangulationBadge) {
+            if (showMinimizedRoute || showMinimizedLos || showTriangulationBadge) {
                 val configuration = LocalConfiguration.current
                 val badgesMaxWidth = (configuration.screenWidthDp * 0.35f).dp
                 FlowRow(
@@ -993,6 +1005,54 @@ fun NavigationMainScreen(
                                         Icons.Default.Close,
                                         contentDescription = "Отмена маршрута",
                                         tint = Color.Gray,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Minimized Line of Sight Badge
+                    if (showMinimizedLos) {
+                        Surface(
+                            color = Color(0xFF1B2A20).copy(alpha = 0.92f),
+                            shape = RoundedCornerShape(16.dp),
+                            border = BorderStroke(1.dp, Color(0xFF66BB6A).copy(alpha = 0.8f)),
+                            tonalElevation = 6.dp,
+                            modifier = Modifier
+                                .testTag("minimized_los_badge")
+                                .clickable { isLosMinimized = false }
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    Icons.Default.Visibility,
+                                    contentDescription = "Развернуть прямую видимость",
+                                    tint = Color(0xFF66BB6A),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Видимость",
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF66BB6A),
+                                    fontSize = 12.sp,
+                                    maxLines = 1
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                IconButton(
+                                    onClick = {
+                                        isLosMinimized = false
+                                        viewModel.cancelVisibilityCheck()
+                                    },
+                                    modifier = Modifier.size(20.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Close,
+                                        contentDescription = "Закрыть прямую видимость",
+                                        tint = Color(0xFF9E9E9E),
                                         modifier = Modifier.size(14.dp)
                                     )
                                 }
@@ -1202,6 +1262,7 @@ fun NavigationMainScreen(
             },
             onCheckVisibility = {
                 // The tapped waypoint is the OBSERVER; the target is chosen next.
+                isLosMinimized = false
                 viewModel.beginVisibilityCheck(wp.toGeoPoint())
                 editingWaypoint = null
                 Toast.makeText(context, "Выберите цель на карте", Toast.LENGTH_SHORT).show()
@@ -1335,6 +1396,10 @@ fun NavigationMainScreen(
                 viewModel.startRegionDownload(minZ, maxZ, sources)
                 viewModel.cancelRegionSelection()
             },
+            onOpenDataExchange = {
+                showRegionDownloadDialog = false
+                showDataExchangeDialog = true
+            },
             onDismiss = { showRegionDownloadDialog = false }
         )
     }
@@ -1351,8 +1416,8 @@ fun NavigationMainScreen(
         val msg = when {
             result.cancelled ->
                 "Загрузка остановлена. Загружено ${result.downloaded} тайлов.$blocked"
-            result.abortedByProvider ->
-                "Серверы карт не отвечают — загрузить не удалось.$blocked Повторите позже."
+            result.abortedByProvider || result.blockedSources.isNotEmpty() ->
+                "Провайдер заблокировал массовую загрузку (скачано ${result.downloaded} тайлов).$blocked Рекомендуем импортировать офлайн-карту файлом .mbtiles."
             else ->
                 "Готово: ${result.downloaded} новых, ${result.skipped} уже были.$blocked"
         }
@@ -1446,6 +1511,7 @@ fun NavigationMainScreen(
             },
             onDismiss = {
                 showLosDialog = false
+                isLosMinimized = false
                 viewModel.clearLineOfSight()
             }
         )

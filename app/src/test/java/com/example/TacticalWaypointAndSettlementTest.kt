@@ -147,7 +147,11 @@ class TacticalWaypointAndSettlementTest {
 
         viewModel.toggleRuler()
         assertTrue("Ruler must be active", viewModel.rulerState.value.isActive)
-        assertFalse("Route builder must be deactivated by Ruler", viewModel.routeBuilderState.value.isActive)
+        assertTrue("Route builder state should be preserved when ruler is used", viewModel.routeBuilderState.value.isActive)
+
+        // Explicit cancel deactivates route builder
+        viewModel.cancelRouteBuilder()
+        assertFalse("Route builder must be deactivated on explicit cancel", viewModel.routeBuilderState.value.isActive)
     }
 
     @Test

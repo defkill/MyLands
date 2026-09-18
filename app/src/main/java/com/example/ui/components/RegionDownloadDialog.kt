@@ -2,6 +2,9 @@ package com.example.ui.components
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -30,11 +33,14 @@ fun RegionDownloadDialog(
     availableSources: List<TileSource>,
     estimateFor: (minZoom: Int, maxZoom: Int, layerCount: Int) -> DownloadEstimate?,
     onStart: (minZoom: Int, maxZoom: Int, sources: List<TileSource>) -> Unit,
+    onOpenDataExchange: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
     var minZoom by remember { mutableStateOf(12) }
     var maxZoom by remember { mutableStateOf(16) }
     val selected = remember { mutableStateListOf<TileSource>().apply { availableSources.firstOrNull()?.let { add(it) } } }
+
+    val hasOsmSources = selected.any { it.id == "osm_standard" || it.id == "topo" || it.id.contains("osm") }
 
     val estimate = estimateFor(minZoom, maxZoom, selected.size.coerceAtLeast(1))
 
@@ -67,7 +73,48 @@ fun RegionDownloadDialog(
                             },
                             colors = CheckboxDefaults.colors(checkedColor = Color(0xFF00897B))
                         )
-                        Text(source.name, color = Color.White, fontSize = 13.sp)
+                        Text(
+                            source.name + if (source.id == "satellite") " (рекомендуется)" else "",
+                            color = if (source.id == "satellite") Color(0xFF81C784) else Color.White,
+                            fontSize = 13.sp
+                        )
+                    }
+                }
+
+                if (hasOsmSources) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Surface(
+                        color = Color(0xFF261C14),
+                        shape = RoundedCornerShape(8.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFF9800).copy(alpha = 0.5f))
+                    ) {
+                        Column(modifier = Modifier.padding(8.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.WarningAmber, contentDescription = null, tint = Color(0xFFFFB74D), modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    "Ограничения OSM",
+                                    color = Color(0xFFFFB74D),
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                "Провайдер OSM ограничивает массовую загрузку тайлов. Для больших районов используйте импорт файла .mbtiles — это быстрее и надёжнее.",
+                                color = Color(0xFFD7CCC8),
+                                fontSize = 11.sp,
+                                lineHeight = 14.sp
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            TextButton(
+                                onClick = onOpenDataExchange,
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                modifier = Modifier.align(Alignment.End)
+                            ) {
+                                Text("Импорт .mbtiles", color = Color(0xFF80D8FF), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
                     }
                 }
 
