@@ -20,13 +20,39 @@ enum class GeometryType {
 data class IntPoint(val x: Int, val y: Int)
 
 /**
- * Parsed vector feature with decoded geometry and key-value properties.
+ * High-performance primitive buffer for building flat [x0, y0, x1, y1, ...] coordinate arrays
+ * without object boxing or ArrayList overhead.
+ */
+class IntBuffer(initialCapacity: Int = 64) {
+    var data = IntArray(initialCapacity)
+        private set
+    var size = 0
+        private set
+
+    fun add(value: Int) {
+        if (size == data.size) data = data.copyOf(data.size * 2)
+        data[size++] = value
+    }
+
+    fun addPoint(x: Int, y: Int) {
+        if (size + 2 > data.size) data = data.copyOf(maxOf(data.size * 2, size + 2))
+        data[size++] = x
+        data[size++] = y
+    }
+
+    fun isNotEmpty(): Boolean = size > 0
+
+    fun toIntArray(): IntArray = data.copyOf(size)
+}
+
+/**
+ * Parsed vector feature with decoded geometry as primitive [IntArray] rings/lines and key-value properties.
  */
 data class VectorFeature(
     val id: Long = 0L,
     val geometryType: GeometryType,
     val attributes: Map<String, Any>,
-    val geometry: List<List<IntPoint>>
+    val geometry: List<IntArray>
 )
 
 /**
@@ -326,11 +352,11 @@ object MvtParser {
      * 2 = LineTo (count)
      * 7 = ClosePath (count = 1)
      */
-    fun decodeGeometry(commands: List<Int>, geomType: GeometryType): List<List<IntPoint>> {
-        val result = mutableListOf<List<IntPoint>>()
+    fun decodeGeometry(commands: List<Int>, geomType: GeometryType): List<IntArray> {
+        val result = mutableListOf<IntArray>()
         var cursorX = 0
         var cursorY = 0
-        var currentRing = mutableListOf<IntPoint>()
+        var currentRing = IntBuffer(64)
 
         var index = 0
         while (index < commands.size) {
@@ -348,13 +374,13 @@ object MvtParser {
                             val dy = decodeZigzag32(commands[index++])
                             cursorX += dx
                             cursorY += dy
-                            currentRing.add(IntPoint(cursorX, cursorY))
+                            currentRing.addPoint(cursorX, cursorY)
                         }
                     } else {
                         // For LineString and Polygon, MoveTo starts a new ring/path
                         if (currentRing.isNotEmpty()) {
-                            result.add(currentRing)
-                            currentRing = mutableListOf()
+                            result.add(currentRing.toIntArray())
+                            currentRing = IntBuffer(64)
                         }
                         for (c in 0 until count) {
                             if (index + 1 >= commands.size) break
@@ -362,7 +388,7 @@ object MvtParser {
                             val dy = decodeZigzag32(commands[index++])
                             cursorX += dx
                             cursorY += dy
-                            currentRing.add(IntPoint(cursorX, cursorY))
+                            currentRing.addPoint(cursorX, cursorY)
                         }
                     }
                 }
@@ -373,18 +399,23 @@ object MvtParser {
                         val dy = decodeZigzag32(commands[index++])
                         cursorX += dx
                         cursorY += dy
-                        currentRing.add(IntPoint(cursorX, cursorY))
+                        currentRing.addPoint(cursorX, cursorY)
                     }
                 }
                 7 -> { // ClosePath
                     if (currentRing.isNotEmpty()) {
                         // Explicitly close if polygon ring is not closed
-                        val first = currentRing.first()
-                        if (currentRing.last() != first) {
-                            currentRing.add(first)
+                        if (currentRing.size >= 4) {
+                            val firstX = currentRing.data[0]
+                            val firstY = currentRing.data[1]
+                            val lastX = currentRing.data[currentRing.size - 2]
+                            val lastY = currentRing.data[currentRing.size - 1]
+                            if (firstX != lastX || firstY != lastY) {
+                                currentRing.addPoint(firstX, firstY)
+                            }
                         }
-                        result.add(currentRing)
-                        currentRing = mutableListOf()
+                        result.add(currentRing.toIntArray())
+                        currentRing = IntBuffer(64)
                     }
                 }
                 else -> {
@@ -395,7 +426,7 @@ object MvtParser {
         }
 
         if (currentRing.isNotEmpty()) {
-            result.add(currentRing)
+            result.add(currentRing.toIntArray())
         }
 
         return result

@@ -251,18 +251,17 @@ class VectorTileRasterizer(
             val paint = paintProvider(feature)
 
             for (ring in feature.geometry) {
-                if (ring.size < 3) continue
+                if (ring.size < 6) continue
                 reusablePath.rewind()
-                var first = true
-                for (pt in ring) {
-                    val px = ((pt.x.toFloat() * scale - offsetX * extent) * tileSizePx) / extent
-                    val py = ((pt.y.toFloat() * scale - offsetY * extent) * tileSizePx) / extent
-                    if (first) {
-                        reusablePath.moveTo(px, py)
-                        first = false
-                    } else {
-                        reusablePath.lineTo(px, py)
-                    }
+                val px0 = ((ring[0].toFloat() * scale - offsetX * extent) * tileSizePx) / extent
+                val py0 = ((ring[1].toFloat() * scale - offsetY * extent) * tileSizePx) / extent
+                reusablePath.moveTo(px0, py0)
+                var i = 2
+                while (i < ring.size) {
+                    val px = ((ring[i].toFloat() * scale - offsetX * extent) * tileSizePx) / extent
+                    val py = ((ring[i + 1].toFloat() * scale - offsetY * extent) * tileSizePx) / extent
+                    reusablePath.lineTo(px, py)
+                    i += 2
                 }
                 reusablePath.close()
                 canvas.drawPath(reusablePath, paint)
@@ -289,18 +288,17 @@ class VectorTileRasterizer(
             val paint = paintProvider(feature)
 
             for (line in feature.geometry) {
-                if (line.size < 2) continue
+                if (line.size < 4) continue
                 reusablePath.rewind()
-                var first = true
-                for (pt in line) {
-                    val px = ((pt.x.toFloat() * scale - offsetX * extent) * tileSizePx) / extent
-                    val py = ((pt.y.toFloat() * scale - offsetY * extent) * tileSizePx) / extent
-                    if (first) {
-                        reusablePath.moveTo(px, py)
-                        first = false
-                    } else {
-                        reusablePath.lineTo(px, py)
-                    }
+                val px0 = ((line[0].toFloat() * scale - offsetX * extent) * tileSizePx) / extent
+                val py0 = ((line[1].toFloat() * scale - offsetY * extent) * tileSizePx) / extent
+                reusablePath.moveTo(px0, py0)
+                var i = 2
+                while (i < line.size) {
+                    val px = ((line[i].toFloat() * scale - offsetX * extent) * tileSizePx) / extent
+                    val py = ((line[i + 1].toFloat() * scale - offsetY * extent) * tileSizePx) / extent
+                    reusablePath.lineTo(px, py)
+                    i += 2
                 }
                 canvas.drawPath(reusablePath, paint)
             }
@@ -371,18 +369,17 @@ class VectorTileRasterizer(
     ) {
         for (f in features) {
             for (line in f.geometry) {
-                if (line.size < 2) continue
+                if (line.size < 4) continue
                 reusablePath.rewind()
-                var first = true
-                for (pt in line) {
-                    val px = ((pt.x.toFloat() * scale - offsetX * extent) * tileSizePx) / extent
-                    val py = ((pt.y.toFloat() * scale - offsetY * extent) * tileSizePx) / extent
-                    if (first) {
-                        reusablePath.moveTo(px, py)
-                        first = false
-                    } else {
-                        reusablePath.lineTo(px, py)
-                    }
+                val px0 = ((line[0].toFloat() * scale - offsetX * extent) * tileSizePx) / extent
+                val py0 = ((line[1].toFloat() * scale - offsetY * extent) * tileSizePx) / extent
+                reusablePath.moveTo(px0, py0)
+                var i = 2
+                while (i < line.size) {
+                    val px = ((line[i].toFloat() * scale - offsetX * extent) * tileSizePx) / extent
+                    val py = ((line[i + 1].toFloat() * scale - offsetY * extent) * tileSizePx) / extent
+                    reusablePath.lineTo(px, py)
+                    i += 2
                 }
                 canvas.drawPath(reusablePath, paint)
             }
@@ -417,10 +414,12 @@ class VectorTileRasterizer(
 
                 // Place labels are points
                 for (ring in f.geometry) {
-                    for (pt in ring) {
-                        val px = ((pt.x.toFloat() * scale - offsetX * extent) * tileSizePx) / extent
-                        val py = ((pt.y.toFloat() * scale - offsetY * extent) * tileSizePx) / extent
+                    var i = 0
+                    while (i < ring.size) {
+                        val px = ((ring[i].toFloat() * scale - offsetX * extent) * tileSizePx) / extent
+                        val py = ((ring[i + 1].toFloat() * scale - offsetY * extent) * tileSizePx) / extent
                         drawTextWithHalo(canvas, name, px, py, textSize, textColor, occupiedBoxes)
+                        i += 2
                     }
                 }
             }
@@ -437,12 +436,15 @@ class VectorTileRasterizer(
 
                     // Midpoint of first line
                     val firstLine = f.geometry.firstOrNull() ?: continue
-                    if (firstLine.size >= 2) {
-                        val midIdx = firstLine.size / 2
-                        val p1 = firstLine[midIdx - 1]
-                        val p2 = firstLine[midIdx]
-                        val midX = (p1.x + p2.x) / 2f
-                        val midY = (p1.y + p2.y) / 2f
+                    val pointCount = firstLine.size / 2
+                    if (pointCount >= 2) {
+                        val midIdx = pointCount / 2
+                        val p1x = firstLine[(midIdx - 1) * 2]
+                        val p1y = firstLine[(midIdx - 1) * 2 + 1]
+                        val p2x = firstLine[midIdx * 2]
+                        val p2y = firstLine[midIdx * 2 + 1]
+                        val midX = (p1x + p2x) / 2f
+                        val midY = (p1y + p2y) / 2f
                         val px = ((midX * scale - offsetX * extent) * tileSizePx) / extent
                         val py = ((midY * scale - offsetY * extent) * tileSizePx) / extent
                         drawTextWithHalo(canvas, name, px, py, 10f, colorTextStreet, occupiedBoxes)
@@ -460,10 +462,12 @@ class VectorTileRasterizer(
                     val name = (f.attributes["name"] ?: f.attributes["name:uk"]) as? String ?: continue
                     if (name.isBlank()) continue
                     for (ring in f.geometry) {
-                        for (pt in ring) {
-                            val px = ((pt.x.toFloat() * scale - offsetX * extent) * tileSizePx) / extent
-                            val py = ((pt.y.toFloat() * scale - offsetY * extent) * tileSizePx) / extent
+                        var i = 0
+                        while (i < ring.size) {
+                            val px = ((ring[i].toFloat() * scale - offsetX * extent) * tileSizePx) / extent
+                            val py = ((ring[i + 1].toFloat() * scale - offsetY * extent) * tileSizePx) / extent
                             drawTextWithHalo(canvas, name, px, py, 9.5f, colorTextPoi, occupiedBoxes)
+                            i += 2
                         }
                     }
                 }

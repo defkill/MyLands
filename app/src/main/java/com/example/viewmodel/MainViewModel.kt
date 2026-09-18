@@ -560,12 +560,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         val firstSource = newSources.first() as MbtilesTileSource
                         tileManager.attachMbtiles(firstSource.file)
                         _activeMbtiles.value = firstSource
+                        _activeTileSource.value = firstSource
                     }
                 }
             }
         } catch (e: Exception) {
             Log.w("MainViewModel", "Error restoring saved offline maps: ${e.message}")
         }
+    }
+
+    fun onLowMemory() {
+        tileManager.onLowMemory()
     }
 
     // --- Elevation (SRTM/HGT), line of sight, route profile ---

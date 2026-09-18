@@ -34,6 +34,9 @@ class TileManager(private val context: Context) {
 
     private val fallbackCache = LruCache<String, Bitmap>(64)
 
+    // Limit concurrent vector tile parsing and rasterization to 2 threads to prevent peak memory spikes
+    private val vectorParseDispatcher = Dispatchers.IO.limitedParallelism(2)
+
     companion object {
         /**
          * Must identify this specific application. OSM blocks generic/faked agents.
@@ -193,31 +196,40 @@ class TileManager(private val context: Context) {
      * Loads tile bitmap asynchronously:
      * Memory -> MBTiles (direct SQLite) -> Offline Package (.orntpack) -> Disk Cache -> Network.
      */
-    suspend fun getTileBitmap(source: TileSource, tile: TileCoordinate): Bitmap? = withContext(Dispatchers.IO) {
+    suspend fun getTileBitmap(source: TileSource, tile: TileCoordinate): Bitmap? {
         val cacheKey = "${source.id}/${tile.key}"
 
-        // 1. Memory Cache
-        memoryCache.get(cacheKey)?.let { return@withContext it }
+        // 1. Fast Memory Cache lookup (no coroutine context switch)
+        memoryCache.get(cacheKey)?.let { return it }
 
-        // 2. Direct MBTiles SQLite Source
-        if (source is MbtilesTileSource) {
-            val bmp = source.getTileBitmap(tile.zoom, tile.x, tile.y)
-            if (bmp != null) {
-                memoryCache.put(cacheKey, bmp)
-                return@withContext bmp
+        val isVector = (source as? MbtilesTileSource)?.metadata?.isVector == true ||
+            (source.id == activeMbtilesSource?.id && activeMbtilesSource?.metadata?.isVector == true)
+
+        val dispatcher = if (isVector) vectorParseDispatcher else Dispatchers.IO
+
+        return withContext(dispatcher) {
+            // Re-check memory cache after acquiring thread
+            memoryCache.get(cacheKey)?.let { return@withContext it }
+
+            // 2. Direct MBTiles SQLite Source
+            if (source is MbtilesTileSource) {
+                val bmp = source.getTileBitmap(tile.zoom, tile.x, tile.y)
+                if (bmp != null) {
+                    memoryCache.put(cacheKey, bmp)
+                    return@withContext bmp
+                }
+                return@withContext null
+            } else if (activeMbtilesSource != null && source.id == activeMbtilesSource?.id) {
+                val bmp = activeMbtilesSource?.getTileBitmap(tile.zoom, tile.x, tile.y)
+                if (bmp != null) {
+                    memoryCache.put(cacheKey, bmp)
+                    return@withContext bmp
+                }
+                return@withContext null
+            } else if (source.type == MapTileType.MBTILES) {
+                // Source is MBTILES but no matching instance found
+                return@withContext null
             }
-            return@withContext null
-        } else if (activeMbtilesSource != null && source.id == activeMbtilesSource?.id) {
-            val bmp = activeMbtilesSource?.getTileBitmap(tile.zoom, tile.x, tile.y)
-            if (bmp != null) {
-                memoryCache.put(cacheKey, bmp)
-                return@withContext bmp
-            }
-            return@withContext null
-        } else if (source.type == MapTileType.MBTILES) {
-            // Source is MBTILES but no matching instance found
-            return@withContext null
-        }
 
         // 3. Offline Package (.orntpack or .zip)
         offlineZipFile?.let { zip ->
@@ -305,6 +317,7 @@ class TileManager(private val context: Context) {
 
         null
     }
+}
 
     /**
      * Creates a fallback grid tile with coordinates when completely offline and no cached tile.
@@ -371,6 +384,15 @@ class TileManager(private val context: Context) {
     fun clearMemoryCache() {
         memoryCache.evictAll()
         fallbackCache.evictAll()
+    }
+
+    /**
+     * Responds to system TRIM_MEMORY signals by evicting all memory caches and parsed vector structures.
+     */
+    fun onLowMemory() {
+        memoryCache.evictAll()
+        fallbackCache.evictAll()
+        activeMbtilesSource?.clearParsedCache()
     }
 
     /**

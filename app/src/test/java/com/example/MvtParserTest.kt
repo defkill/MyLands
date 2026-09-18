@@ -1,7 +1,6 @@
 package com.example
 
 import com.example.map.vector.GeometryType
-import com.example.map.vector.IntPoint
 import com.example.map.vector.MvtParser
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -39,8 +38,9 @@ class MvtParserTest {
         val decoded = MvtParser.decodeGeometry(commands, GeometryType.POINT)
 
         assertEquals(1, decoded.size)
-        assertEquals(1, decoded[0].size)
-        assertEquals(IntPoint(25, 17), decoded[0][0])
+        assertEquals(2, decoded[0].size) // [x, y]
+        assertEquals(25, decoded[0][0])
+        assertEquals(17, decoded[0][1])
     }
 
     @Test
@@ -54,10 +54,13 @@ class MvtParserTest {
         val decoded = MvtParser.decodeGeometry(commands, GeometryType.LINESTRING)
 
         assertEquals(1, decoded.size)
-        assertEquals(3, decoded[0].size)
-        assertEquals(IntPoint(10, 10), decoded[0][0])
-        assertEquals(IntPoint(20, 30), decoded[0][1])
-        assertEquals(IntPoint(25, 35), decoded[0][2])
+        assertEquals(6, decoded[0].size) // 3 points * 2 coords = 6 ints
+        assertEquals(10, decoded[0][0])
+        assertEquals(10, decoded[0][1])
+        assertEquals(20, decoded[0][2])
+        assertEquals(30, decoded[0][3])
+        assertEquals(25, decoded[0][4])
+        assertEquals(35, decoded[0][5])
     }
 
     @Test
@@ -74,12 +77,17 @@ class MvtParserTest {
 
         assertEquals(1, decoded.size)
         val ring = decoded[0]
-        assertEquals(5, ring.size) // Closed ring
-        assertEquals(IntPoint(0, 0), ring[0])
-        assertEquals(IntPoint(10, 0), ring[1])
-        assertEquals(IntPoint(10, 10), ring[2])
-        assertEquals(IntPoint(0, 10), ring[3])
-        assertEquals(IntPoint(0, 0), ring[4])
+        assertEquals(10, ring.size) // Closed ring of 5 points (10 ints)
+        assertEquals(0, ring[0])
+        assertEquals(0, ring[1])
+        assertEquals(10, ring[2])
+        assertEquals(0, ring[3])
+        assertEquals(10, ring[4])
+        assertEquals(10, ring[5])
+        assertEquals(0, ring[6])
+        assertEquals(10, ring[7])
+        assertEquals(0, ring[8])
+        assertEquals(0, ring[9])
     }
 
     @Test

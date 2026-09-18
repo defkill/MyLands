@@ -1,7 +1,6 @@
 package com.example
 
 import com.example.map.vector.GeometryType
-import com.example.map.vector.IntPoint
 import com.example.map.vector.VectorFeature
 import com.example.map.vector.VectorLayer
 import com.example.map.vector.VectorTile
@@ -36,7 +35,7 @@ class VectorTileRasterizerTest {
             geometryType = GeometryType.POLYGON,
             attributes = mapOf("kind" to "lake"),
             geometry = listOf(
-                listOf(IntPoint(100, 100), IntPoint(500, 100), IntPoint(500, 500), IntPoint(100, 500), IntPoint(100, 100))
+                intArrayOf(100, 100, 500, 100, 500, 500, 100, 500, 100, 100)
             )
         )
         val waterLayer = VectorLayer(name = "water_polygons", extent = 4096, features = listOf(waterFeature))
@@ -46,7 +45,7 @@ class VectorTileRasterizerTest {
             geometryType = GeometryType.LINESTRING,
             attributes = mapOf("kind" to "motorway", "name" to "M-06"),
             geometry = listOf(
-                listOf(IntPoint(0, 2048), IntPoint(4096, 2048))
+                intArrayOf(0, 2048, 4096, 2048)
             )
         )
         val roadsLayer = VectorLayer(name = "street_lines", extent = 4096, features = listOf(roadFeature))
@@ -56,7 +55,7 @@ class VectorTileRasterizerTest {
             geometryType = GeometryType.POLYGON,
             attributes = mapOf("building" to "yes"),
             geometry = listOf(
-                listOf(IntPoint(2000, 2000), IntPoint(2200, 2000), IntPoint(2200, 2200), IntPoint(2000, 2200), IntPoint(2000, 2000))
+                intArrayOf(2000, 2000, 2200, 2000, 2200, 2200, 2000, 2200, 2000, 2000)
             )
         )
         val buildingsLayer = VectorLayer(name = "buildings", extent = 4096, features = listOf(buildingFeature))
@@ -66,7 +65,7 @@ class VectorTileRasterizerTest {
             geometryType = GeometryType.POINT,
             attributes = mapOf("name" to "Kyiv", "kind" to "capital"),
             geometry = listOf(
-                listOf(IntPoint(2048, 2048))
+                intArrayOf(2048, 2048)
             )
         )
         val placesLayer = VectorLayer(name = "place_labels", extent = 4096, features = listOf(placeFeature))

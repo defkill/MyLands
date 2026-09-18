@@ -4,6 +4,7 @@ import android.database.sqlite.SQLiteDatabase
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Log
+import android.util.LruCache
 import com.example.model.GeoPoint
 import java.io.Closeable
 import java.io.File
@@ -49,6 +50,17 @@ class MbtilesTileSource(
     private var db: SQLiteDatabase? = null
     private val vectorRasterizer by lazy { com.example.map.vector.VectorTileRasterizer(512) }
     private var hasLoggedVectorDebug = false
+
+    // Cache of parsed vector tiles. Key is parent coordinate (targetZoom/targetX/targetY).
+    // Capacity 6 is sufficient to cover viewport during overzoom without redundant parsing.
+    private val parsedTileCache = object : LruCache<String, com.example.map.vector.VectorTile>(6) {}
+    private val parseLock = Any()
+
+    fun clearParsedCache() {
+        synchronized(parseLock) {
+            parsedTileCache.evictAll()
+        }
+    }
 
     init {
         openDb()
@@ -115,7 +127,17 @@ class MbtilesTileSource(
                     val blob = cursor.getBlob(0)
                     if (blob != null && blob.isNotEmpty()) {
                         if (isVector) {
-                            val vectorTile = com.example.map.vector.MvtParser.parse(blob)
+                            val parsedKey = "$targetZoom/$targetX/$targetY"
+                            val vectorTile = synchronized(parseLock) {
+                                parsedTileCache.get(parsedKey) ?: run {
+                                    val parsed = com.example.map.vector.MvtParser.parse(blob)
+                                    if (parsed != null) {
+                                        parsedTileCache.put(parsedKey, parsed)
+                                    }
+                                    parsed
+                                }
+                            }
+                            if (vectorTile == null) return null
 
                             // Diagnostic introspection for Stage 1 (Logcat Tag: VectorTileDebug)
                             if (!hasLoggedVectorDebug && vectorTile.layers.isNotEmpty()) {
@@ -193,6 +215,7 @@ class MbtilesTileSource(
     }
 
     override fun close() {
+        clearParsedCache()
         try {
             if (db?.isOpen == true) {
                 db?.close()
