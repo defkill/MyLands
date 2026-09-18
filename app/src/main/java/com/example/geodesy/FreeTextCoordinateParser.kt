@@ -41,8 +41,8 @@ object FreeTextCoordinateParser {
 
     // Hemisphere prefixes and suffixes:
     // Latin: N, S, E, W
-    // Cyrillic: С, Ю, В, З, пн, пд, сх, зх (and variations like пн.ш., сх.д., с.ш., в.д.)
-    private const val HEM_SRC = """(?:[NSEWnsew]|[СсЮюВвЗз]|пн\.?\s*ш?\.?|пд\.?\s*ш?\.?|сх\.?\s*д?\.?|зх\.?\s*д?\.?|с\.?\s*ш\.?|ю\.?\s*ш\.?|в\.?\s*д\.?|з\.?\s*д\.?)"""
+    // Cyrillic: пн, пд, сх, зх (and variations like пн.ш., сх.д., с.ш., в.д.)
+    private const val HEM_SRC = """(?:[NSEWnsew]|пн\.?\s*ш?\.?|пд\.?\s*ш?\.?|сх\.?\s*д?\.?|зх\.?\s*д?\.?|с\.?\s*ш\.?|ю\.?\s*ш\.?|в\.?\s*д\.?|з\.?\s*д\.?)"""
 
     /**
      * Normalizes non-breaking spaces, variants of dashes, quotation marks, apostrophes, and degree signs.

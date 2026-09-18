@@ -126,4 +126,29 @@ class FreeTextCoordinateParserTest {
         assertEquals(48.4647, res3.points[0].lat, EPS)
         assertEquals(35.0461, res3.points[0].lon, EPS)
     }
+
+    @Test
+    fun testPrepositions_DoNotForceHemisphereAxis() {
+        // "в" и "с" — предлоги, не должны читаться как обозначение полушария.
+        // Числа рядом с ними по-прежнему МОГУТ быть найдены другими эвристиками
+        // (диапазон/UA_BOX), но не должны получить принудительную, потенциально
+        // неверную ось только из-за соседства с предлогом.
+        val result = FreeTextCoordinateParser.parse(
+            "выступаем в 15.00, с 3 бойцами дойдём до рубежа, доложить в 300 м"
+        )
+        // Ни одно из этих чисел не должно дать координатную пару —
+        // это обычный текст без координат.
+        assertTrue(result.points.isEmpty())
+    }
+
+    @Test
+    fun testDecimalPair_NotMisorderedByAdjacentPreposition() {
+        // Настоящая пара координат, но с предлогом "в" случайно прямо перед ней.
+        val result = FreeTextCoordinateParser.parse("прибыли в 48.4647, 35.0462")
+        assertEquals(1, result.points.size)
+        // Широта Украины ~48-54, долгота ~22-40 — проверяем, что порядок не спутан
+        // из-за предлога "в" перед первым числом.
+        assertEquals(48.4647, result.points[0].lat, 0.0001)
+        assertEquals(35.0462, result.points[0].lon, 0.0001)
+    }
 }
