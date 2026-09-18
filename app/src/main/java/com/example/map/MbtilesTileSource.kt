@@ -107,6 +107,17 @@ class MbtilesTileSource(
         val isVector = metadata.isVector
         val nativeMaxZoom = metadata.maxZoom
 
+        // Pre-check available heap memory before loading/parsing heavy vector tiles
+        if (isVector) {
+            val runtime = Runtime.getRuntime()
+            val freeHeapBytes = runtime.maxMemory() - (runtime.totalMemory() - runtime.freeMemory())
+            // If less than 32 MB of available heap remains, avoid running into OOM
+            if (freeHeapBytes < 32L * 1024 * 1024) {
+                Log.w("MbtilesTileSource", "Low heap memory ($freeHeapBytes bytes free). Skipping vector tile parse for Z=$zoom X=$x Y=$y")
+                return null
+            }
+        }
+
         // Calculate overzoom parameters if zoom level exceeds native dataset maxZoom
         val targetZoom: Int
         val targetX: Int
@@ -185,8 +196,11 @@ class MbtilesTileSource(
                     } else null
                 } else null
             }
-        } catch (e: Exception) {
-            Log.w("MbtilesTileSource", "Error querying tile Z=$zoom X=$x Y=$y (targetZ=$targetZoom targetX=$targetX TMS=$tmsRow): ${e.message}")
+        } catch (e: Throwable) {
+            Log.e("MbtilesTileSource", "Failed to parse/rasterize tile Z=$zoom X=$x Y=$y (targetZ=$targetZoom targetX=$targetX TMS=$tmsRow): ${e.javaClass.simpleName}: ${e.message}", e)
+            if (e is OutOfMemoryError) {
+                System.gc()
+            }
             null
         }
     }
@@ -323,8 +337,8 @@ class MbtilesTileSource(
                 database = null
 
                 MbtilesTileSource(file, metadata)
-            } catch (e: Exception) {
-                Log.e("MbtilesTileSource", "Failed to parse MBTiles: ${e.message}")
+            } catch (e: Throwable) {
+                Log.e("MbtilesTileSource", "Failed to parse MBTiles: ${e.javaClass.simpleName}: ${e.message}", e)
                 null
             } finally {
                 try {

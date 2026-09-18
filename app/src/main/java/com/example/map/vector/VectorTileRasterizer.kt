@@ -9,6 +9,7 @@ import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
+import android.util.Log
 
 /**
  * High-performance tactical rasterizer for Mapbox Vector Tiles / Shortbread Schema.
@@ -162,8 +163,13 @@ class VectorTileRasterizer(
         parentZoom: Int = zoom,
         offsetX: Int = 0,
         offsetY: Int = 0
-    ): Bitmap {
-        val bitmap = Bitmap.createBitmap(tileSizePx, tileSizePx, Bitmap.Config.ARGB_8888)
+    ): Bitmap? {
+        val bitmap = try {
+            Bitmap.createBitmap(tileSizePx, tileSizePx, Bitmap.Config.ARGB_8888)
+        } catch (e: OutOfMemoryError) {
+            Log.e("VectorTileRasterizer", "OOM creating tile bitmap", e)
+            return null
+        }
         val canvas = Canvas(bitmap)
 
         // 1. Clear background

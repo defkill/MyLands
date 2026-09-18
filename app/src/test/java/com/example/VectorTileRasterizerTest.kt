@@ -22,7 +22,7 @@ class VectorTileRasterizerTest {
         val emptyTile = VectorTile(emptyList())
         val bmp = rasterizer.rasterize(emptyTile, zoom = 14)
         assertNotNull(bmp)
-        assertEquals(512, bmp.width)
+        assertEquals(512, bmp!!.width)
         assertEquals(512, bmp.height)
     }
 
@@ -79,7 +79,7 @@ class VectorTileRasterizerTest {
         // Test overzoom at z=16 (parent z=14, offset (1, 1))
         val bmp16 = rasterizer.rasterize(tile, zoom = 16, parentZoom = 14, offsetX = 1, offsetY = 1)
         assertNotNull(bmp16)
-        assertEquals(512, bmp16.width)
+        assertEquals(512, bmp16!!.width)
         assertEquals(512, bmp16.height)
     }
 }
