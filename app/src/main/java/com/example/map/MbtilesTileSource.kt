@@ -52,8 +52,23 @@ class MbtilesTileSource(
     private var hasLoggedVectorDebug = false
 
     // Cache of parsed vector tiles. Key is parent coordinate (targetZoom/targetX/targetY).
-    // Capacity 6 is sufficient to cover viewport during overzoom without redundant parsing.
-    private val parsedTileCache = object : LruCache<String, com.example.map.vector.VectorTile>(6) {}
+    // Capacity is capped at 1/16th of max available heap to avoid memory exhaustion on dense tiles.
+    private val parsedTileCache = object : LruCache<String, com.example.map.vector.VectorTile>(
+        (Runtime.getRuntime().maxMemory() / 16).toInt().coerceAtLeast(1024 * 1024)
+    ) {
+        override fun sizeOf(key: String, value: com.example.map.vector.VectorTile): Int {
+            var bytes = 0
+            for (layer in value.layers) {
+                for (feature in layer.features) {
+                    for (ring in feature.geometry) {
+                        bytes += ring.size * 4 // IntArray: 4 bytes per coordinate
+                    }
+                    bytes += 64 + feature.attributes.size * 48
+                }
+            }
+            return bytes.coerceAtLeast(1)
+        }
+    }
     private val parseLock = Any()
 
     fun clearParsedCache() {
@@ -133,6 +148,18 @@ class MbtilesTileSource(
                                     val parsed = com.example.map.vector.MvtParser.parse(blob)
                                     if (parsed != null) {
                                         parsedTileCache.put(parsedKey, parsed)
+                                        var totalFeatures = 0
+                                        var estimatedBytes = 0
+                                        for (layer in parsed.layers) {
+                                            totalFeatures += layer.features.size
+                                            for (feature in layer.features) {
+                                                for (ring in feature.geometry) {
+                                                    estimatedBytes += ring.size * 4
+                                                }
+                                                estimatedBytes += 64 + feature.attributes.size * 48
+                                            }
+                                        }
+                                        Log.d("VectorTileDebug", "Parsed $parsedKey: ~${estimatedBytes / 1024} KB, $totalFeatures features")
                                     }
                                     parsed
                                 }
