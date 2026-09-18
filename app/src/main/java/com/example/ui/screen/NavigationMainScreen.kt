@@ -43,6 +43,7 @@ import com.example.map.MapTileType
 import com.example.map.OfflineMapFormat
 import com.example.map.TileSource
 import com.example.model.*
+import com.example.sensor.OrientationData
 import com.example.ui.components.*
 import kotlinx.coroutines.launch
 import com.example.ui.map.TacticalMapView
@@ -64,7 +65,6 @@ fun NavigationMainScreen(
     val gpsLocation by viewModel.gpsLocation.collectAsStateWithLifecycle()
     val gpsStatus by viewModel.gpsStatus.collectAsStateWithLifecycle()
     val orientationDataState = viewModel.orientationData.collectAsStateWithLifecycle()
-    val orientationData by orientationDataState
     val pdrState by viewModel.pdrState.collectAsStateWithLifecycle()
     val activeTileSource by viewModel.activeTileSource.collectAsStateWithLifecycle()
     val availableTileSources by viewModel.availableTileSources.collectAsStateWithLifecycle()
@@ -104,7 +104,6 @@ fun NavigationMainScreen(
     val effectiveLocationState = remember(gpsLocation, pdrState.lastEstimatedPosition, manualPositionOverride) {
         derivedStateOf { gpsLocation ?: pdrState.lastEstimatedPosition ?: manualPositionOverride }
     }
-    val effectiveLocation = effectiveLocationState.value
     val blindDistanceMeters by viewModel.blindDistanceMeters.collectAsStateWithLifecycle()
     val selectedWaypoint by viewModel.selectedWaypoint.collectAsStateWithLifecycle()
     val candidatePoint by viewModel.candidatePoint.collectAsStateWithLifecycle()
@@ -159,6 +158,7 @@ fun NavigationMainScreen(
     var showBatteryOptimizationDialog by remember { mutableStateOf(false) }
     var hasDismissedBatteryOptPrompt by remember { mutableStateOf(false) }
     var extraContentHeightPx by remember { mutableStateOf(0) }
+    var coordBarHeightPx by remember { mutableStateOf(0) }
 
     // Location permission can be missing even when the system location toggle is on:
     // the OS switch and the per-app grant are separate things. Allow re-requesting it
@@ -357,13 +357,7 @@ fun NavigationMainScreen(
                             modifier = Modifier.size(18.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = AngleUnit.format(orientationData.trueHeadingDeg.toDouble(), userPreferences.defaultAngleUnit),
-                            color = Color.White,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace
-                        )
+                        HeadingChipText(orientationDataState, userPreferences.defaultAngleUnit)
                     }
                 }
 
@@ -619,7 +613,7 @@ fun NavigationMainScreen(
             // 2a. Mini Compass HUD Widget (top right under buttons bar)
             if (showMiniCompassHud) {
                 MiniCompassHudWidget(
-                    orientationData = orientationData,
+                    orientationData = orientationDataState,
                     angleUnit = userPreferences.defaultAngleUnit,
                     onExpand = {
                         showCompassScreen = true
@@ -936,11 +930,12 @@ fun NavigationMainScreen(
 
                 // Main Tactical Coordinate Bottom Bar
                 CoordinateBottomBar(
+                    modifier = Modifier.onGloballyPositioned { coordBarHeightPx = it.size.height },
                     crosshairPoint = mapCenter,
                     bundle = crosshairBundle,
                     selectedCoordSystem = userPreferences.defaultCoordinateSystem,
                     angleUnit = userPreferences.defaultAngleUnit,
-                    orientationData = orientationData,
+                    orientationData = orientationDataState,
                     gpsStatus = gpsStatus,
                     pdrState = pdrState,
                     terrainElevation = terrainElevation,
@@ -954,7 +949,15 @@ fun NavigationMainScreen(
             val showTriangulationBadge = triangulationState.rays.isNotEmpty() && !showTriangulationDialog
             if (showMinimizedRoute || showTriangulationBadge) {
                 val density = LocalDensity.current
-                val dynamicBottomPadding = with(density) { extraContentHeightPx.toDp() } + 12.dp
+                val dynamicBottomPadding = with(density) {
+                    if (extraContentHeightPx > 0) {
+                        // карточка есть: поднимаем бейджи над ней — над координатной панелью И над карточкой
+                        (coordBarHeightPx + extraContentHeightPx).toDp() + 8.dp
+                    } else {
+                        // карточки нет: бейджи вровень с координатной панелью
+                        12.dp
+                    }
+                }
                 FlowRow(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
@@ -1103,7 +1106,7 @@ fun NavigationMainScreen(
     if (showSavedWaypointsSheet) {
         SavedWaypointsSheet(
             waypoints = waypoints,
-            userLocation = effectiveLocation,
+            userLocation = effectiveLocationState.value,
             angleUnit = userPreferences.defaultAngleUnit,
             coordinateSystem = userPreferences.defaultCoordinateSystem,
             onSelectWaypoint = { wp ->
@@ -1181,7 +1184,7 @@ fun NavigationMainScreen(
     if (showSettlementSearchSheet) {
         SettlementSearchSheet(
             repository = viewModel.settlementRepository,
-            userLocation = effectiveLocation,
+            userLocation = effectiveLocationState.value,
             onSelectSettlement = { settlement ->
                 val pt = GeoPoint(settlement.latitude, settlement.longitude)
                 viewModel.setMapCenter(pt)
@@ -1506,8 +1509,8 @@ fun NavigationMainScreen(
 
     if (showCompassScreen) {
         CompassFullScreenDialog(
-            orientationData = orientationData,
-            position = effectiveLocation,
+            orientationData = orientationDataState.value,
+            position = effectiveLocationState.value,
             coordinateSystem = userPreferences.defaultCoordinateSystem,
             angleUnit = userPreferences.defaultAngleUnit,
             waypoints = waypoints,
@@ -1801,3 +1804,18 @@ private fun getFileNameFromUri(context: android.content.Context, uri: android.ne
     }
     return name ?: "map_file"
 }
+
+@Composable
+private fun HeadingChipText(
+    orientationState: State<OrientationData>,
+    angleUnit: AngleUnit
+) {
+    Text(
+        text = AngleUnit.format(orientationState.value.trueHeadingDeg.toDouble(), angleUnit),
+        color = Color.White,
+        fontSize = 14.sp,
+        fontWeight = FontWeight.Bold,
+        fontFamily = FontFamily.Monospace
+    )
+}
+

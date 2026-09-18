@@ -124,6 +124,7 @@ fun TacticalMapView(
     val onCandidatePointDragMovedState by rememberUpdatedState(onCandidatePointDragMoved)
     val onRayEndpointTappedState by rememberUpdatedState(onRayEndpointTapped)
     var isDraggingCandidatePoint by remember { mutableStateOf(false) }
+    val renderCache = remember { TacticalMapRenderCache() }
 
     Canvas(
         modifier = modifier
@@ -323,25 +324,25 @@ fun TacticalMapView(
         )
 
         // 2. Draw Military Grid Overlay
-        drawMilitaryGrid(center, zoom, width, height)
+        drawMilitaryGrid(center, zoom, width, height, renderCache)
 
         // 3. Draw Recorded Tracks
         // Previously recorded tracks the user chose to display, drawn under the active one.
         savedTrackPoints.values.forEach { pts ->
-            drawTrackPoints(pts, center, zoom, width, height)
+            drawTrackPoints(pts, center, zoom, width, height, renderCache)
         }
 
-        drawTrackPoints(activeTrackPoints, center, zoom, width, height)
+        drawTrackPoints(activeTrackPoints, center, zoom, width, height, renderCache)
 
         // 4a. Draw all saved routes (persisted polylines)
         drawSavedRoutes(savedRoutes, waypoints, center, zoom, width, height)
 
         // 4b. Draw Route Builder Polylines & Legs (currently being edited)
-        drawRouteBuilder(routeBuilderState, center, zoom, width, height, angleUnit)
+        drawRouteBuilder(routeBuilderState, center, zoom, width, height, angleUnit, renderCache)
 
         // 5. Draw triangulation rays and their crossing point
         if (triangulationState.rays.isNotEmpty()) {
-            drawTriangulation(triangulationState, center, zoom, width, height)
+            drawTriangulation(triangulationState, center, zoom, width, height, renderCache)
         }
 
         // 5b. Draw the region selection rectangle
@@ -353,36 +354,36 @@ fun TacticalMapView(
         // blocked; without it, a plain bearing line so the azimuth and distance are still usable
         // in the field rather than showing nothing at all.
         if (losResult != null) {
-            drawLineOfSight(losResult, center, zoom, width, height)
+            drawLineOfSight(losResult, center, zoom, width, height, renderCache)
         } else if (losObserver != null && losTarget != null) {
-            drawPlainSightLine(losObserver, losTarget, center, zoom, width, height, angleUnit)
+            drawPlainSightLine(losObserver, losTarget, center, zoom, width, height, angleUnit, renderCache)
         }
 
         // 6. Draw Ruler
         if (rulerState.isActive && rulerState.startPoint != null && rulerState.endPoint != null) {
-            drawRuler(rulerState, center, zoom, width, height, angleUnit)
+            drawRuler(rulerState, center, zoom, width, height, angleUnit, renderCache)
         }
 
         // 7. Draw Waypoints
         val currentUserLoc = userLocation.value
         val currentOrientation = orientationData.value
         val effectiveUser = currentUserLoc ?: manualPosition
-        drawWaypoints(waypoints, selectedWaypoint, center, zoom, width, height, effectiveUser, angleUnit)
+        drawWaypoints(waypoints, selectedWaypoint, center, zoom, width, height, effectiveUser, angleUnit, renderCache)
 
         // 7b. Draw Candidate Point & Targeting Vector
         val activeTarget = candidatePoint ?: selectedWaypoint?.toGeoPoint()
         if (activeTarget != null && effectiveUser != null) {
-            drawTargetBearingLine(effectiveUser, activeTarget, center, zoom, width, height)
+            drawTargetBearingLine(effectiveUser, activeTarget, center, zoom, width, height, renderCache)
         }
         if (candidatePoint != null) {
-            drawCandidatePoint(candidatePoint, center, zoom, width, height)
+            drawCandidatePoint(candidatePoint, center, zoom, width, height, renderCache)
         }
 
         // 8. Draw User Location Puck and Heading
         if (currentUserLoc != null) {
-            drawUserLocation(currentUserLoc, currentOrientation, center, zoom, width, height)
+            drawUserLocation(currentUserLoc, currentOrientation, center, zoom, width, height, renderCache)
         } else if (manualPosition != null) {
-            drawManualUserLocation(manualPosition, currentOrientation, center, zoom, width, height)
+            drawManualUserLocation(manualPosition, currentOrientation, center, zoom, width, height, renderCache)
         }
 
         // 9. Draw Center Crosshair
@@ -461,7 +462,13 @@ private fun DrawScope.drawTiles(
     }
 }
 
-private fun DrawScope.drawMilitaryGrid(center: GeoPoint, zoom: Double, width: Float, height: Float) {
+private fun DrawScope.drawMilitaryGrid(
+    center: GeoPoint,
+    zoom: Double,
+    width: Float,
+    height: Float,
+    cache: TacticalMapRenderCache
+) {
     if (zoom < 10.0) return
 
     val gridStepDeg = if (zoom >= 15.0) 0.01 else if (zoom >= 13.0) 0.05 else 0.1
@@ -472,13 +479,6 @@ private fun DrawScope.drawMilitaryGrid(center: GeoPoint, zoom: Double, width: Fl
     val endLon = startLon + gridStepDeg * 8
 
     val gridColor = Color(0x334CAF50) // Tactical translucent green
-    val textColor = Color(0x8881C784)
-
-    val paint = AndroidPaint().apply {
-        color = android.graphics.Color.argb(140, 129, 199, 132)
-        textSize = 28f
-        isAntiAlias = true
-    }
 
     var lat = startLat
     while (lat <= endLat) {
@@ -491,7 +491,7 @@ private fun DrawScope.drawMilitaryGrid(center: GeoPoint, zoom: Double, width: Fl
                 String.format(java.util.Locale.US, "%.3f°", lat),
                 16f,
                 sy1 - 6f,
-                paint
+                cache.militaryGridPaint
             )
         }
         lat += gridStepDeg
@@ -507,7 +507,7 @@ private fun DrawScope.drawMilitaryGrid(center: GeoPoint, zoom: Double, width: Fl
                 String.format(java.util.Locale.US, "%.3f°", lon),
                 sx1 + 6f,
                 height - 20f,
-                paint
+                cache.militaryGridPaint
             )
         }
         lon += gridStepDeg
@@ -519,13 +519,13 @@ private fun DrawScope.drawTrackPoints(
     center: GeoPoint,
     zoom: Double,
     width: Float,
-    height: Float
+    height: Float,
+    cache: TacticalMapRenderCache
 ) {
     if (points.size < 2) return
 
     val gpsColor = Color(0xFF4CAF50)
     val drColor = Color(0xFFFF9800)
-    val drPathEffect = PathEffect.dashPathEffect(floatArrayOf(20f, 15f), 0f)
 
     for (i in 0 until points.size - 1) {
         val p1 = points[i]
@@ -536,7 +536,7 @@ private fun DrawScope.drawTrackPoints(
 
         val isDr = p2.source == TrackPointEntity.SOURCE_DEAD_RECKONING
         val color = if (isDr) drColor else gpsColor
-        val effect = if (isDr) drPathEffect else null
+        val effect = if (isDr) cache.trackDrDashEffect else null
 
         drawLine(
             color = color,
@@ -555,7 +555,8 @@ private fun DrawScope.drawPlainSightLine(
     zoom: Double,
     width: Float,
     height: Float,
-    angleUnit: AngleUnit
+    angleUnit: AngleUnit,
+    cache: TacticalMapRenderCache
 ) {
     val (ax, ay) = MapProjection.geoToScreen(
         observer, center.latitude, center.longitude, zoom, width, height
@@ -571,7 +572,7 @@ private fun DrawScope.drawPlainSightLine(
         start = Offset(ax, ay),
         end = Offset(bx, by),
         strokeWidth = 5f,
-        pathEffect = PathEffect.dashPathEffect(floatArrayOf(20f, 12f), 0f)
+        pathEffect = cache.sightLineDashEffect
     )
 
     drawCircle(Color.White, radius = 7f, center = Offset(ax, ay))
@@ -585,19 +586,11 @@ private fun DrawScope.drawPlainSightLine(
         String.format(java.util.Locale.US, "%.0f м", distance)
     }
 
-    val paint = AndroidPaint().apply {
-        color = android.graphics.Color.rgb(255, 213, 79)
-        textSize = 28f
-        isAntiAlias = true
-        isFakeBoldText = true
-        textAlign = AndroidPaint.Align.CENTER
-        setShadowLayer(6f, 0f, 0f, android.graphics.Color.BLACK)
-    }
     drawContext.canvas.nativeCanvas.drawText(
         "${AngleUnit.format(azimuth, angleUnit)} · $distStr",
         (ax + bx) / 2f,
         (ay + by) / 2f - 14f,
-        paint
+        cache.sightLinePaint
     )
 }
 
@@ -606,14 +599,12 @@ private fun DrawScope.drawLineOfSight(
     center: GeoPoint,
     zoom: Double,
     width: Float,
-    height: Float
+    height: Float,
+    cache: TacticalMapRenderCache
 ) {
     val samples = result.samples
     if (samples.size < 2) return
 
-    // Colour by position relative to the blocking summit, not per-segment: everything up to the
-    // obstacle is genuinely visible, everything past it is dead ground. Segment-by-segment
-    // colouring produced a striped line that told the user nothing useful.
     val cutoff = result.worstObstacle?.distanceMeters
 
     for (i in 0 until samples.size - 1) {
@@ -651,7 +642,8 @@ private fun DrawScope.drawLineOfSight(
         )
 
         val size = 20f
-        val path = Path().apply {
+        val path = cache.reusablePath1.apply {
+            reset()
             moveTo(ox, oy - size)
             lineTo(ox - size * 0.9f, oy + size * 0.7f)
             lineTo(ox + size * 0.9f, oy + size * 0.7f)
@@ -660,19 +652,11 @@ private fun DrawScope.drawLineOfSight(
         drawPath(path, Color(0xFFFF5722))
         drawPath(path, Color.White, style = Stroke(3f))
 
-        val paint = AndroidPaint().apply {
-            color = android.graphics.Color.WHITE
-            textSize = 30f
-            isAntiAlias = true
-            isFakeBoldText = true
-            textAlign = AndroidPaint.Align.CENTER
-            setShadowLayer(6f, 0f, 0f, android.graphics.Color.BLACK)
-        }
         drawContext.canvas.nativeCanvas.drawText(
             "${o.terrainMeters.toInt()} м",
             ox,
             oy - size - 12f,
-            paint
+            cache.losElevationPaint
         )
     }
 }
@@ -682,17 +666,10 @@ private fun DrawScope.drawTriangulation(
     center: GeoPoint,
     zoom: Double,
     width: Float,
-    height: Float
+    height: Float,
+    cache: TacticalMapRenderCache
 ) {
     val rayColor = Color(0xFFFF7043)
-    val dash = PathEffect.dashPathEffect(floatArrayOf(16f, 10f), 0f)
-
-    val paint = AndroidPaint().apply {
-        color = android.graphics.Color.rgb(255, 138, 101)
-        textSize = 26f
-        isAntiAlias = true
-        setShadowLayer(4f, 0f, 0f, android.graphics.Color.BLACK)
-    }
 
     state.rays.forEach { ray ->
         val start = ray.originPoint
@@ -707,7 +684,7 @@ private fun DrawScope.drawTriangulation(
             start = Offset(sx, sy),
             end = Offset(ex, ey),
             strokeWidth = 4f,
-            pathEffect = if (ray.lengthMeters == null) dash else null
+            pathEffect = if (ray.lengthMeters == null) cache.triangulationDashEffect else null
         )
 
         val label = if (ray.lengthMeters != null) {
@@ -715,7 +692,7 @@ private fun DrawScope.drawTriangulation(
         } else {
             String.format(java.util.Locale.US, "%.0f°", ray.azimuthDeg)
         }
-        drawContext.canvas.nativeCanvas.drawText(label, (sx + ex) / 2f, (sy + ey) / 2f - 10f, paint)
+        drawContext.canvas.nativeCanvas.drawText(label, (sx + ex) / 2f, (sy + ey) / 2f - 10f, cache.triangulationPaint)
 
         if (ray.lengthMeters != null) {
             drawCircle(rayColor, radius = 9f, center = Offset(ex, ey))
@@ -807,19 +784,13 @@ private fun DrawScope.drawRouteBuilder(
     zoom: Double,
     width: Float,
     height: Float,
-    angleUnit: AngleUnit
+    angleUnit: AngleUnit,
+    cache: TacticalMapRenderCache
 ) {
     if (!routeState.isActive) return
 
     val routeColor = Color(0xFF00E5FF) // Cyan
     val legs = routeState.legs
-
-    val paint = AndroidPaint().apply {
-        color = android.graphics.Color.WHITE
-        textSize = 30f
-        isAntiAlias = true
-        setShadowLayer(4f, 0f, 0f, android.graphics.Color.BLACK)
-    }
 
     legs.forEach { leg ->
         val (s1x, s1y) = MapProjection.geoToScreen(leg.fromPoint.toGeoPoint(), center.latitude, center.longitude, zoom, width, height)
@@ -840,7 +811,7 @@ private fun DrawScope.drawRouteBuilder(
         val azStr = AngleUnit.format(leg.forwardAzimuthDeg, angleUnit)
         val label = "#${leg.index}: $distStr | $azStr"
 
-        drawContext.canvas.nativeCanvas.drawText(label, midX - 60f, midY - 12f, paint)
+        drawContext.canvas.nativeCanvas.drawText(label, midX - 60f, midY - 12f, cache.routeLegPaint)
     }
 }
 
@@ -850,7 +821,8 @@ private fun DrawScope.drawRuler(
     zoom: Double,
     width: Float,
     height: Float,
-    angleUnit: AngleUnit
+    angleUnit: AngleUnit,
+    cache: TacticalMapRenderCache
 ) {
     val p1 = ruler.startPoint ?: return
     val p2 = ruler.endPoint ?: return
@@ -873,15 +845,8 @@ private fun DrawScope.drawRuler(
     val midX = (s1x + s2x) / 2f
     val midY = (s1y + s2y) / 2f
 
-    val paint = AndroidPaint().apply {
-        color = android.graphics.Color.WHITE
-        textSize = 34f
-        isAntiAlias = true
-        setShadowLayer(6f, 0f, 0f, android.graphics.Color.BLACK)
-    }
-
     val text = "${ruler.formatDistance()} | ${ruler.formatAzimuth(angleUnit)}"
-    drawContext.canvas.nativeCanvas.drawText(text, midX - 80f, midY - 20f, paint)
+    drawContext.canvas.nativeCanvas.drawText(text, midX - 80f, midY - 20f, cache.rulerPaint)
 }
 
 private fun DrawScope.drawWaypoints(
@@ -892,24 +857,9 @@ private fun DrawScope.drawWaypoints(
     width: Float,
     height: Float,
     userLocation: GeoPoint?,
-    angleUnit: AngleUnit
+    angleUnit: AngleUnit,
+    cache: TacticalMapRenderCache
 ) {
-    val textPaint = AndroidPaint().apply {
-        color = android.graphics.Color.WHITE
-        textSize = 28f
-        isAntiAlias = true
-        setShadowLayer(4f, 0f, 0f, android.graphics.Color.BLACK)
-    }
-
-    // Azimuth / distance readout shown under every waypoint, measured from the user's
-    // current position, so multiple points can be compared at a glance while moving.
-    val navPaint = AndroidPaint().apply {
-        color = android.graphics.Color.rgb(129, 212, 250)
-        textSize = 24f
-        isAntiAlias = true
-        setShadowLayer(4f, 0f, 0f, android.graphics.Color.BLACK)
-    }
-
     waypoints.forEach { wp ->
         val (sx, sy) = MapProjection.geoToScreen(wp.toGeoPoint(), center.latitude, center.longitude, zoom, width, height)
         val isSelected = selected?.id == wp.id
@@ -924,7 +874,7 @@ private fun DrawScope.drawWaypoints(
             drawCircle(Color.Cyan, radius = radius + 6f, center = Offset(sx, sy), style = Stroke(2f))
         }
 
-        drawContext.canvas.nativeCanvas.drawText(wp.name, sx + 16f, sy + 10f, textPaint)
+        drawContext.canvas.nativeCanvas.drawText(wp.name, sx + 16f, sy + 10f, cache.waypointNamePaint)
 
         if (userLocation != null) {
             val target = wp.toGeoPoint()
@@ -937,7 +887,7 @@ private fun DrawScope.drawWaypoints(
                 String.format(java.util.Locale.US, "%.0f м", distM)
             }
             val label = "${AngleUnit.format(azDeg, angleUnit)} · $distStr"
-            drawContext.canvas.nativeCanvas.drawText(label, sx + 16f, sy + 38f, navPaint)
+            drawContext.canvas.nativeCanvas.drawText(label, sx + 16f, sy + 38f, cache.waypointNavPaint)
         }
     }
 }
@@ -947,7 +897,8 @@ private fun DrawScope.drawCandidatePoint(
     center: GeoPoint,
     zoom: Double,
     width: Float,
-    height: Float
+    height: Float,
+    cache: TacticalMapRenderCache
 ) {
     val (sx, sy) = MapProjection.geoToScreen(candidate, center.latitude, center.longitude, zoom, width, height)
     val amber = Color(0xFFFF9800)
@@ -960,20 +911,14 @@ private fun DrawScope.drawCandidatePoint(
         Color(0xFFFFB74D),
         radius = radius + 8f,
         center = Offset(sx, sy),
-        style = Stroke(2f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f), 0f))
+        style = Stroke(2f, pathEffect = cache.candidateCircleDashEffect)
     )
 
     // Crosshairs
     drawLine(Color.White, Offset(sx - radius - 8f, sy), Offset(sx + radius + 8f, sy), strokeWidth = 2f)
     drawLine(Color.White, Offset(sx, sy - radius - 8f), Offset(sx, sy + radius + 8f), strokeWidth = 2f)
 
-    val paint = AndroidPaint().apply {
-        color = android.graphics.Color.WHITE
-        textSize = 28f
-        isAntiAlias = true
-        setShadowLayer(6f, 0f, 0f, android.graphics.Color.BLACK)
-    }
-    drawContext.canvas.nativeCanvas.drawText("Точка-кандидат", sx + 22f, sy + 10f, paint)
+    drawContext.canvas.nativeCanvas.drawText("Точка-кандидат", sx + 22f, sy + 10f, cache.candidatePointPaint)
 }
 
 private fun DrawScope.drawTargetBearingLine(
@@ -982,18 +927,18 @@ private fun DrawScope.drawTargetBearingLine(
     center: GeoPoint,
     zoom: Double,
     width: Float,
-    height: Float
+    height: Float,
+    cache: TacticalMapRenderCache
 ) {
     val (s1x, s1y) = MapProjection.geoToScreen(userLocation, center.latitude, center.longitude, zoom, width, height)
     val (s2x, s2y) = MapProjection.geoToScreen(target, center.latitude, center.longitude, zoom, width, height)
 
-    val dash = PathEffect.dashPathEffect(floatArrayOf(12f, 8f), 0f)
     drawLine(
         color = Color(0xFFFFB74D),
         start = Offset(s1x, s1y),
         end = Offset(s2x, s2y),
         strokeWidth = 3f,
-        pathEffect = dash
+        pathEffect = cache.targetBearingDashEffect
     )
 }
 
@@ -1003,7 +948,8 @@ private fun DrawScope.drawUserLocation(
     center: GeoPoint,
     zoom: Double,
     width: Float,
-    height: Float
+    height: Float,
+    cache: TacticalMapRenderCache
 ) {
     val (sx, sy) = MapProjection.geoToScreen(userLocation, center.latitude, center.longitude, zoom, width, height)
 
@@ -1028,7 +974,8 @@ private fun DrawScope.drawUserLocation(
     // Directional Cone pointing in heading direction
     val heading = orientationData.trueHeadingDeg
     rotate(heading, pivot = Offset(sx, sy)) {
-        val conePath = Path().apply {
+        val conePath = cache.reusablePath1.apply {
+            reset()
             moveTo(sx, sy - 42f)
             lineTo(sx - 18f, sy + 10f)
             lineTo(sx, sy)
@@ -1049,7 +996,8 @@ private fun DrawScope.drawManualUserLocation(
     center: GeoPoint,
     zoom: Double,
     width: Float,
-    height: Float
+    height: Float,
+    cache: TacticalMapRenderCache
 ) {
     val (sx, sy) = MapProjection.geoToScreen(manualLocation, center.latitude, center.longitude, zoom, width, height)
 
@@ -1058,13 +1006,14 @@ private fun DrawScope.drawManualUserLocation(
         color = Color(0xFFFF9800),
         radius = 24f,
         center = Offset(sx, sy),
-        style = Stroke(2.5f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f), 0f))
+        style = Stroke(2.5f, pathEffect = cache.manualCircleDashEffect)
     )
 
     // Directional Cone pointing in heading direction (amber tint)
     val heading = orientationData.trueHeadingDeg
     rotate(heading, pivot = Offset(sx, sy)) {
-        val conePath = Path().apply {
+        val conePath = cache.reusablePath1.apply {
+            reset()
             moveTo(sx, sy - 42f)
             lineTo(sx - 18f, sy + 10f)
             lineTo(sx, sy)
@@ -1079,14 +1028,7 @@ private fun DrawScope.drawManualUserLocation(
     drawCircle(Color(0xFFFF9800), radius = 7f, center = Offset(sx, sy))
 
     // Distinct "ВРУЧНУЮ" text label
-    val paint = AndroidPaint().apply {
-        color = android.graphics.Color.rgb(255, 183, 77)
-        textSize = 24f
-        isAntiAlias = true
-        isFakeBoldText = true
-        setShadowLayer(6f, 0f, 0f, android.graphics.Color.BLACK)
-    }
-    drawContext.canvas.nativeCanvas.drawText("ВРУЧНУЮ", sx + 28f, sy + 8f, paint)
+    drawContext.canvas.nativeCanvas.drawText("ВРУЧНУЮ", sx + 28f, sy + 8f, cache.manualPositionPaint)
 }
 
 private fun DrawScope.drawCrosshair(width: Float, height: Float) {

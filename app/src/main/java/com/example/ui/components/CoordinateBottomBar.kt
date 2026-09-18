@@ -10,6 +10,7 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -34,7 +35,7 @@ fun CoordinateBottomBar(
     bundle: CoordinateBundle,
     selectedCoordSystem: CoordinateSystem,
     angleUnit: AngleUnit,
-    orientationData: OrientationData,
+    orientationData: State<OrientationData>,
     gpsStatus: GpsStatus,
     pdrState: PdrState,
     /** True terrain height from local SRTM data, when tiles are available. */
@@ -227,14 +228,7 @@ fun CoordinateBottomBar(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     // True & Magnetic Heading
-                    val trueAzStr = AngleUnit.format(orientationData.trueHeadingDeg.toDouble(), angleUnit)
-                    val declStr = String.format(Locale.US, "%+.1f°", orientationData.magneticDeclinationDeg)
-                    Text(
-                        text = "АЗ: $trueAzStr (Скл: $declStr)",
-                        color = Color(0xFFFFD54F), // Amber
-                        fontSize = 12.sp,
-                        fontFamily = FontFamily.Monospace
-                    )
+                    HeadingTelemetryText(orientationData, angleUnit)
 
                     if (terrainElevation != null) {
                         Text(
@@ -268,4 +262,20 @@ fun CoordinateBottomBar(
             }
         }
     }
+}
+
+@Composable
+private fun HeadingTelemetryText(
+    orientationData: State<OrientationData>,
+    angleUnit: AngleUnit
+) {
+    val currentOrientation = orientationData.value
+    val trueAzStr = AngleUnit.format(currentOrientation.trueHeadingDeg.toDouble(), angleUnit)
+    val declStr = String.format(Locale.US, "%+.1f°", currentOrientation.magneticDeclinationDeg)
+    Text(
+        text = "АЗ: $trueAzStr (Скл: $declStr)",
+        color = Color(0xFFFFD54F), // Amber
+        fontSize = 12.sp,
+        fontFamily = FontFamily.Monospace
+    )
 }

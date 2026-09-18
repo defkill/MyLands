@@ -325,13 +325,12 @@ fun cardinalName(deg: Double): String {
  */
 @Composable
 fun MiniCompassHudWidget(
-    orientationData: OrientationData,
+    orientationData: State<OrientationData>,
     angleUnit: AngleUnit,
     onExpand: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val heading = orientationData.trueHeadingDeg.toDouble()
     Surface(
         modifier = modifier
             .testTag("mini_compass_hud")
@@ -376,6 +375,24 @@ fun MiniCompassHudWidget(
 
             Spacer(modifier = Modifier.height(2.dp))
 
+            val pNorth = remember {
+                AndroidPaint().apply {
+                    color = android.graphics.Color.rgb(255, 100, 100)
+                    textSize = 18f
+                    isAntiAlias = true
+                    isFakeBoldText = true
+                    textAlign = AndroidPaint.Align.CENTER
+                }
+            }
+            val pOther = remember {
+                AndroidPaint().apply {
+                    color = android.graphics.Color.WHITE
+                    textSize = 15f
+                    isAntiAlias = true
+                    textAlign = AndroidPaint.Align.CENTER
+                }
+            }
+
             // Mini rotating dial
             Box(
                 modifier = Modifier
@@ -384,6 +401,8 @@ fun MiniCompassHudWidget(
                 contentAlignment = Alignment.Center
             ) {
                 Canvas(modifier = Modifier.fillMaxSize()) {
+                    val currentOrientation = orientationData.value
+                    val heading = currentOrientation.trueHeadingDeg.toDouble()
                     val cx = size.width / 2f
                     val cy = size.height / 2f
                     val r = size.minDimension / 2f * 0.88f
@@ -422,19 +441,6 @@ fun MiniCompassHudWidget(
 
                         // Cardinal letters
                         val cardinals = listOf(0 to "С", 90 to "В", 180 to "Ю", 270 to "З")
-                        val pNorth = AndroidPaint().apply {
-                            color = android.graphics.Color.rgb(255, 100, 100)
-                            textSize = 18f
-                            isAntiAlias = true
-                            isFakeBoldText = true
-                            textAlign = AndroidPaint.Align.CENTER
-                        }
-                        val pOther = AndroidPaint().apply {
-                            color = android.graphics.Color.WHITE
-                            textSize = 15f
-                            isAntiAlias = true
-                            textAlign = AndroidPaint.Align.CENTER
-                        }
                         cardinals.forEach { (d, label) ->
                             val rad = Math.toRadians(d.toDouble() - 90.0)
                             val lr = r - 16f
@@ -451,41 +457,52 @@ fun MiniCompassHudWidget(
 
             Spacer(modifier = Modifier.height(2.dp))
 
-            // Azimuth value & Cardinal text
-            Text(
-                text = AngleUnit.format(heading, angleUnit),
-                color = Color.White,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Bold,
-                fontFamily = FontFamily.Monospace
-            )
-            if (isCompassAccuracyLow(orientationData.accuracy)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        Icons.Default.Warning,
-                        contentDescription = "Низкая точность компаса",
-                        tint = Color(0xFFFFB74D),
-                        modifier = Modifier.size(10.dp)
-                    )
-                    Spacer(modifier = Modifier.width(2.dp))
-                    Text(
-                        text = "Калибр.",
-                        color = Color(0xFFFFB74D),
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            } else {
-                Text(
-                    text = cardinalName(heading),
-                    color = Color(0xFFB0BEC5),
-                    fontSize = 10.sp,
-                    maxLines = 1
-                )
-            }
+            MiniCompassBottomText(orientationData, angleUnit)
         }
     }
 }
+
+@Composable
+private fun MiniCompassBottomText(
+    orientationData: State<OrientationData>,
+    angleUnit: AngleUnit
+) {
+    val currentOrientation = orientationData.value
+    val heading = currentOrientation.trueHeadingDeg.toDouble()
+    // Azimuth value & Cardinal text
+    Text(
+        text = AngleUnit.format(heading, angleUnit),
+        color = Color.White,
+        fontSize = 13.sp,
+        fontWeight = FontWeight.Bold,
+        fontFamily = FontFamily.Monospace
+    )
+    if (isCompassAccuracyLow(currentOrientation.accuracy)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                Icons.Default.Warning,
+                contentDescription = "Низкая точность компаса",
+                tint = Color(0xFFFFB74D),
+                modifier = Modifier.size(10.dp)
+            )
+            Spacer(modifier = Modifier.width(2.dp))
+            Text(
+                text = "Калибр.",
+                color = Color(0xFFFFB74D),
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+    } else {
+        Text(
+            text = cardinalName(heading),
+            color = Color(0xFFB0BEC5),
+            fontSize = 10.sp,
+            maxLines = 1
+        )
+    }
+}
+
 
 internal fun isCompassAccuracyLow(accuracy: Int): Boolean {
     return accuracy <= SensorManager.SENSOR_STATUS_ACCURACY_LOW
