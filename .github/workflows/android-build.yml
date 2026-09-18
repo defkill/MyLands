@@ -43,12 +43,12 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-          cache: gradle
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v5
         with:
           gradle-version: 9.3.1
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
       # gradle-wrapper.jar is not committed to this repository, so ./gradlew cannot run
       # until the wrapper is regenerated here. Keep this step unless the jar is added.
@@ -91,8 +91,8 @@ jobs:
         continue-on-error: true
         run: ./gradlew lint --continue
 
+      # Unit tests gate the CI status: failing tests will fail the workflow.
       - name: Run Unit Tests
-        continue-on-error: true
         run: ./gradlew testDebugUnitTest
         env:
           GRADLE_OPTS: "-Djava.awt.headless=true"
@@ -121,12 +121,12 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-          cache: gradle
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v5
         with:
           gradle-version: 9.3.1
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
       - name: Generate Gradle wrapper
         run: |
@@ -147,6 +147,7 @@ jobs:
         env:
           GRADLE_OPTS: "-Djava.awt.headless=true"
           KEYSTORE_PATH: ${{ runner.temp }}/release.jks
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
