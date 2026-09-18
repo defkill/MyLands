@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import com.example.map.OfflineMapFormat
 import com.example.service.MapBackupService
+import com.example.util.SafeZipExtraction
 import com.example.viewmodel.MainViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -114,11 +115,8 @@ fun DataExchangeDialog(
                     val rawDisplayName = queryDisplayName(context, uri)
                     val safeDisplayName = sanitizeFileName(rawDisplayName, "elevation.hgt")
                     val cacheDir = context.cacheDir
-                    val temp = File(cacheDir, safeDisplayName)
-
-                    if (!temp.canonicalPath.startsWith(cacheDir.canonicalPath + File.separator)) {
-                        throw SecurityException("Небезопасный путь к файлу: $rawDisplayName")
-                    }
+                    val temp = SafeZipExtraction.resolveSafely(cacheDir, safeDisplayName)
+                        ?: throw SecurityException("Небезопасный путь к файлу: $rawDisplayName")
 
                     withContext(Dispatchers.IO) {
                         context.contentResolver.openInputStream(uri)?.use { input ->
@@ -462,7 +460,8 @@ fun DataExchangeDialog(
                                 coroutineScope.launch {
                                     isProcessing = true
                                     try {
-                                        val gpxFile = File(context.cacheDir, "tactical_navigation_export.gpx")
+                                        val exportsDir = File(context.cacheDir, "exports").apply { mkdirs() }
+                                        val gpxFile = File(exportsDir, "tactical_navigation_export.gpx")
                                         viewModel.exportToGpx(gpxFile)
                                         shareFile(context, gpxFile, "application/gpx+xml", "Экспорт путевых точек и маршрутов в GPX")
                                     } catch (e: Exception) {
@@ -486,7 +485,8 @@ fun DataExchangeDialog(
                                 coroutineScope.launch {
                                     isProcessing = true
                                     try {
-                                        val kmlFile = File(context.cacheDir, "tactical_navigation_export.kml")
+                                        val exportsDir = File(context.cacheDir, "exports").apply { mkdirs() }
+                                        val kmlFile = File(exportsDir, "tactical_navigation_export.kml")
                                         viewModel.exportToKml(kmlFile)
                                         shareFile(context, kmlFile, "application/vnd.google-earth.kml+xml", "Экспорт путевых точек и маршрутов в KML")
                                     } catch (e: Exception) {
@@ -700,7 +700,8 @@ fun DataExchangeDialog(
                                 coroutineScope.launch {
                                     isProcessing = true
                                     try {
-                                        val packFile = File(context.cacheDir, "tactical_map_region.orntpack")
+                                        val exportsDir = File(context.cacheDir, "exports").apply { mkdirs() }
+                                        val packFile = File(exportsDir, "tactical_map_region.orntpack")
                                         val count = viewModel.packCurrentCache(packFile)
                                         if (count > 0) {
                                             Toast.makeText(context, "Упаковано $count тайлов", Toast.LENGTH_SHORT).show()

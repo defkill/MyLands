@@ -66,6 +66,9 @@ class MapBackupService : Service() {
         const val ACTION_RESTORE = "com.example.action.RESTORE_MAPS"
         const val ACTION_CANCEL = "com.example.action.CANCEL_BACKUP_MAPS"
 
+        const val EXTRA_OUTPUT_PATH = "com.example.extra.OUTPUT_PATH"
+        const val EXTRA_RESTORE_URI = "com.example.extra.RESTORE_URI"
+
         private val _isRunning = MutableStateFlow(false)
         val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
 
@@ -75,16 +78,12 @@ class MapBackupService : Service() {
         private val _lastResult = MutableStateFlow<Result?>(null)
         val lastResult: StateFlow<Result?> = _lastResult.asStateFlow()
 
-        @Volatile private var pendingOutputFile: File? = null
-        @Volatile private var pendingRestoreUri: Uri? = null
-
         fun startBackup(context: Context, outputFile: File) {
-            pendingOutputFile = outputFile
-            pendingRestoreUri = null
             _lastResult.value = null
 
             val intent = Intent(context, MapBackupService::class.java).apply {
                 action = ACTION_BACKUP
+                putExtra(EXTRA_OUTPUT_PATH, outputFile.absolutePath)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)
@@ -94,12 +93,11 @@ class MapBackupService : Service() {
         }
 
         fun startRestore(context: Context, archiveUri: Uri) {
-            pendingRestoreUri = archiveUri
-            pendingOutputFile = null
             _lastResult.value = null
 
             val intent = Intent(context, MapBackupService::class.java).apply {
                 action = ACTION_RESTORE
+                putExtra(EXTRA_RESTORE_URI, archiveUri.toString())
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)
@@ -139,19 +137,29 @@ class MapBackupService : Service() {
                 cancelRequested = true
                 return START_NOT_STICKY
             }
-            ACTION_BACKUP -> startBackupOperation()
-            ACTION_RESTORE -> startRestoreOperation()
+            ACTION_BACKUP -> {
+                val path = intent.getStringExtra(EXTRA_OUTPUT_PATH)
+                if (path == null) {
+                    Log.e(TAG, "Restarted without EXTRA_OUTPUT_PATH, cannot resume backup")
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+                startBackupOperation(File(path))
+            }
+            ACTION_RESTORE -> {
+                val uriStr = intent.getStringExtra(EXTRA_RESTORE_URI)
+                if (uriStr == null) {
+                    Log.e(TAG, "Restarted without EXTRA_RESTORE_URI, cannot resume restore")
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+                startRestoreOperation(Uri.parse(uriStr))
+            }
         }
         return START_NOT_STICKY
     }
 
-    private fun startBackupOperation() {
-        val outputFile = pendingOutputFile
-        if (outputFile == null) {
-            stopSelf()
-            return
-        }
-
+    private fun startBackupOperation(outputFile: File) {
         cancelRequested = false
         _isRunning.value = true
         _lastResult.value = null
@@ -206,13 +214,7 @@ class MapBackupService : Service() {
         }
     }
 
-    private fun startRestoreOperation() {
-        val uri = pendingRestoreUri
-        if (uri == null) {
-            stopSelf()
-            return
-        }
-
+    private fun startRestoreOperation(uri: Uri) {
         cancelRequested = false
         _isRunning.value = true
         _lastResult.value = null

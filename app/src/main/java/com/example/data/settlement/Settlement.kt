@@ -4,5 +4,7 @@ data class Settlement(
     val name: String,
     val oblast: String,
     val latitude: Double,
-    val longitude: Double
+    val longitude: Double,
+    val nameLower: String = name.lowercase(),
+    val oblastLower: String = oblast.lowercase()
 )

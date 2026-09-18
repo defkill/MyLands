@@ -44,7 +44,8 @@ class SettlementRepository(private val context: Context) {
         val filteredByOblast = if (oblastFilter.isNullOrBlank()) {
             all
         } else {
-            all.filter { it.oblast.equals(oblastFilter, ignoreCase = true) }
+            val filterLower = oblastFilter.trim().lowercase()
+            all.filter { it.oblastLower == filterLower }
         }
 
         if (q.isEmpty()) {
@@ -57,8 +58,8 @@ class SettlementRepository(private val context: Context) {
         val containsMatches = mutableListOf<Settlement>()
 
         for (item in filteredByOblast) {
-            val nameLower = item.name.lowercase()
-            val oblastLower = item.oblast.lowercase()
+            val nameLower = item.nameLower
+            val oblastLower = item.oblastLower
 
             if (nameLower == q) {
                 exactMatches.add(item)

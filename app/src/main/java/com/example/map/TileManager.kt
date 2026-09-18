@@ -16,6 +16,7 @@ import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.zip.ZipFile
+import com.example.util.SafeZipExtraction
 
 /**
  * High-performance TileManager with two-tier cache (Memory LRU + Local Disk)
@@ -146,10 +147,12 @@ class TileManager(private val context: Context) {
 
             entries.forEachIndexed { index, entry ->
                 // Reject paths that would escape the tile directory.
-                val safeName = entry.name.replace("\\", "/").trimStart('/')
-                if (safeName.contains("..")) return@forEachIndexed
+                val target = SafeZipExtraction.resolveSafely(baseCacheDir, entry.name)
+                if (target == null) {
+                    Log.w(TAG, "Blocked path traversal attempt in offline package: ${entry.name}")
+                    return@forEachIndexed
+                }
 
-                val target = File(baseCacheDir, safeName)
                 if (!target.exists()) {
                     target.parentFile?.mkdirs()
                     zip.getInputStream(entry).use { input ->
@@ -524,8 +527,8 @@ class TileManager(private val context: Context) {
                     else -> continue // Unknown section - skip safely
                 }
 
-                val targetFile = File(targetRoot, relativePath)
-                if (!targetFile.canonicalPath.startsWith(targetRoot.canonicalPath + File.separator)) {
+                val targetFile = SafeZipExtraction.resolveSafely(targetRoot, relativePath)
+                if (targetFile == null) {
                     Log.w(TAG, "Blocked path traversal in backup entry: ${entry.name}")
                     continue
                 }

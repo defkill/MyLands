@@ -91,6 +91,9 @@ object MvtParser {
         if (data.isEmpty()) return VectorTile(emptyList())
         return try {
             val uncompressed = decompressGzipIfNeeded(data)
+            if (uncompressed.isEmpty()) {
+                return VectorTile(emptyList())
+            }
             if (uncompressed.size > 20 * 1024 * 1024) {
                 Log.w("MvtParser", "Tile too large after decompression: ${uncompressed.size} bytes, skipping")
                 return null
@@ -105,14 +108,33 @@ object MvtParser {
 
     /**
      * Decompresses GZIP byte stream if GZIP magic header (0x1F, 0x8B) is detected.
+     * Enforces [maxAllowedBytes] limit during decompression to prevent GZIP bomb attacks.
      */
-    fun decompressGzipIfNeeded(data: ByteArray): ByteArray {
+    fun decompressGzipIfNeeded(data: ByteArray, maxAllowedBytes: Int = 20 * 1024 * 1024): ByteArray {
         if (data.size < 2) return data
         val isGzip = (data[0].toInt() and 0xFF) == 0x1F && (data[1].toInt() and 0xFF) == 0x8B
         if (!isGzip) return data
 
         return try {
-            GZIPInputStream(ByteArrayInputStream(data)).use { it.readBytes() }
+            val buffer = ByteArray(8192)
+            val initialCapacity = (data.size.toLong() * 4).coerceAtMost(maxAllowedBytes.toLong()).toInt()
+            val out = java.io.ByteArrayOutputStream(initialCapacity.coerceAtLeast(1024))
+            var totalRead = 0
+            GZIPInputStream(ByteArrayInputStream(data)).use { gzip ->
+                while (true) {
+                    val read = gzip.read(buffer)
+                    if (read <= 0) break
+                    totalRead += read
+                    if (totalRead > maxAllowedBytes) {
+                        try {
+                            Log.w("MvtParser", "GZIP payload exceeded limit of $maxAllowedBytes bytes, aborting decompression")
+                        } catch (_: Throwable) {}
+                        return data.copyOf(0)
+                    }
+                    out.write(buffer, 0, read)
+                }
+            }
+            out.toByteArray()
         } catch (_: Exception) {
             data
         }

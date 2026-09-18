@@ -5,6 +5,8 @@ import androidx.test.core.app.ApplicationProvider
 import com.example.ui.components.sanitizeFileName
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -112,6 +114,56 @@ class DataExchangeSecurityTest {
 
             zipFile.delete()
             validFile.delete()
+        }
+    }
+
+    @Test
+    fun `SafeZipExtraction correctly resolves valid entries and rejects traversals`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val baseDir = File(context.cacheDir, "test_base").apply { mkdirs() }
+
+        // Valid relative paths
+        val valid1 = com.example.util.SafeZipExtraction.resolveSafely(baseDir, "tiles/10/500/300.png")
+        assertNotNull(valid1)
+        assertTrue(valid1!!.canonicalPath.startsWith(baseDir.canonicalPath + File.separator))
+
+        val valid2 = com.example.util.SafeZipExtraction.resolveSafely(baseDir, "simple.txt")
+        assertNotNull(valid2)
+        assertEquals(File(baseDir, "simple.txt").canonicalPath, valid2!!.canonicalPath)
+
+        // Path traversal attempts
+        assertNull(com.example.util.SafeZipExtraction.resolveSafely(baseDir, "../../etc/passwd"))
+        assertNull(com.example.util.SafeZipExtraction.resolveSafely(baseDir, "..\\..\\evil.txt"))
+        assertNull(com.example.util.SafeZipExtraction.resolveSafely(baseDir, "sub/../../escape.bin"))
+        assertNull(com.example.util.SafeZipExtraction.resolveSafely(baseDir, "/../../escape.bin"))
+    }
+
+    @Test
+    fun `importOfflinePackage rejects path traversal zip entries`() {
+        kotlinx.coroutines.runBlocking {
+            val context = ApplicationProvider.getApplicationContext<Context>()
+            val tileManager = com.example.map.TileManager(context)
+
+            val packageFile = File(context.cacheDir, "malicious_package.orntpack")
+            java.util.zip.ZipOutputStream(java.io.FileOutputStream(packageFile)).use { zos ->
+                // Valid tile entry
+                zos.putNextEntry(java.util.zip.ZipEntry("osm/1/1/1.png"))
+                zos.write("png_bytes".toByteArray())
+                zos.closeEntry()
+
+                // Malicious traversal tile entry
+                zos.putNextEntry(java.util.zip.ZipEntry("../../evil_tile.png"))
+                zos.write("evil_bytes".toByteArray())
+                zos.closeEntry()
+            }
+
+            val added = tileManager.importOfflinePackage(packageFile)
+            assertEquals(1, added)
+
+            val evilFile = File(context.cacheDir, "evil_tile.png")
+            assertFalse("evil_tile.png must not be extracted outside baseCacheDir", evilFile.exists())
+
+            packageFile.delete()
         }
     }
 }

@@ -119,4 +119,33 @@ class MvtParserTest {
         val decompressed = MvtParser.decompressGzipIfNeeded(compressed)
         assertEquals("Hello Tactical Vector Tile", String(decompressed, Charsets.UTF_8))
     }
+
+    @Test
+    fun testDecompressGzip_RejectsOversizedPayload() {
+        // Compress 100 KB of zeros, and test with custom maxAllowedBytes = 1024
+        val baos = ByteArrayOutputStream()
+        GZIPOutputStream(baos).use { gzip ->
+            gzip.write(ByteArray(100 * 1024))
+        }
+        val bomb = baos.toByteArray()
+        val result = MvtParser.decompressGzipIfNeeded(bomb, maxAllowedBytes = 1024)
+        assertEquals("Payload exceeding limit should return empty array", 0, result.size)
+
+        // Also test with payload exceeding default 20MB limit (21 MB of zeros compresses to ~21 KB)
+        val baos21Mb = ByteArrayOutputStream()
+        GZIPOutputStream(baos21Mb).use { gzip ->
+            val zeroChunk = ByteArray(64 * 1024)
+            repeat(330) { // 330 * 64KB ≈ 21 MB
+                gzip.write(zeroChunk)
+            }
+        }
+        val bomb21Mb = baos21Mb.toByteArray()
+        val resultDefault = MvtParser.decompressGzipIfNeeded(bomb21Mb)
+        assertEquals("Payload exceeding default 20MB limit should return empty array", 0, resultDefault.size)
+
+        // Parse method should safely return empty VectorTile without throwing or crashing
+        val parsedTile = MvtParser.parse(bomb21Mb)
+        assertNotNull(parsedTile)
+        assertTrue(parsedTile!!.layers.isEmpty())
+    }
 }
