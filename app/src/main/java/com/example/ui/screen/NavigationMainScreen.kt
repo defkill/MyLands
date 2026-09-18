@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.AltRoute
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -26,9 +27,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -157,8 +157,6 @@ fun NavigationMainScreen(
     var showDataExchangeDialog by remember { mutableStateOf(false) }
     var showBatteryOptimizationDialog by remember { mutableStateOf(false) }
     var hasDismissedBatteryOptPrompt by remember { mutableStateOf(false) }
-    var extraContentHeightPx by remember { mutableStateOf(0) }
-    var coordBarHeightPx by remember { mutableStateOf(0) }
 
     // Location permission can be missing even when the system location toggle is on:
     // the OS switch and the per-app grant are separate things. Allow re-requesting it
@@ -788,7 +786,7 @@ fun NavigationMainScreen(
                     containerColor = if (routeBuilderState.isActive) Color(0xFF00ACC1) else Color(0xFF263238),
                     contentColor = Color.White
                 ) {
-                    Icon(Icons.Default.AltRoute, contentDescription = "Построение маршрута", modifier = Modifier.size(22.dp))
+                    Icon(Icons.AutoMirrored.Filled.AltRoute, contentDescription = "Построение маршрута", modifier = Modifier.size(22.dp))
                 }
 
                 // Track Recording (Start / Stop Foreground Service)
@@ -813,13 +811,9 @@ fun NavigationMainScreen(
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
             ) {
-                // Measure only variable/conditional overlays (ruler, candidate/waypoint card, LoS, route builder)
+                // Conditional overlays (ruler, candidate/waypoint card, LoS, route builder)
                 Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .onGloballyPositioned { coordinates ->
-                            extraContentHeightPx = coordinates.size.height
-                        }
+                    modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(modifier = Modifier.fillMaxWidth()) {
                         // Active Ruler Overlay or Selected Target (Candidate / Waypoint) Overlay
@@ -854,6 +848,7 @@ fun NavigationMainScreen(
                             RulerOverlay(
                                 rulerState = targetRuler,
                                 angleUnit = userPreferences.defaultAngleUnit,
+                                widthFraction = 0.6f,
                                 title = title,
                                 icon = icon,
                                 iconTint = iconTint,
@@ -930,7 +925,6 @@ fun NavigationMainScreen(
 
                 // Main Tactical Coordinate Bottom Bar
                 CoordinateBottomBar(
-                    modifier = Modifier.onGloballyPositioned { coordBarHeightPx = it.size.height },
                     crosshairPoint = mapCenter,
                     bundle = crosshairBundle,
                     selectedCoordSystem = userPreferences.defaultCoordinateSystem,
@@ -948,20 +942,13 @@ fun NavigationMainScreen(
             val showMinimizedRoute = routeBuilderState.isActive && isRouteBuilderMinimized
             val showTriangulationBadge = triangulationState.rays.isNotEmpty() && !showTriangulationDialog
             if (showMinimizedRoute || showTriangulationBadge) {
-                val density = LocalDensity.current
-                val dynamicBottomPadding = with(density) {
-                    if (extraContentHeightPx > 0) {
-                        // карточка есть: поднимаем бейджи над ней — над координатной панелью И над карточкой
-                        (coordBarHeightPx + extraContentHeightPx).toDp() + 8.dp
-                    } else {
-                        // карточки нет: бейджи вровень с координатной панелью
-                        12.dp
-                    }
-                }
+                val configuration = LocalConfiguration.current
+                val badgesMaxWidth = (configuration.screenWidthDp * 0.35f).dp
                 FlowRow(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
-                        .padding(end = 12.dp, bottom = dynamicBottomPadding),
+                        .padding(end = 12.dp, bottom = 12.dp)
+                        .widthIn(max = badgesMaxWidth),
                     horizontalArrangement = Arrangement.spacedBy(8.dp, alignment = Alignment.End),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {

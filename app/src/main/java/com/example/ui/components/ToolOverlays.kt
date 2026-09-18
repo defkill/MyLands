@@ -30,36 +30,38 @@ fun RulerOverlay(
     angleUnit: AngleUnit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
+    widthFraction: Float = 1f,
     title: String = "ЛИНЕЙКА (ДАЛЬНОСТЬ И АЗИМУТ)",
     icon: androidx.compose.ui.graphics.vector.ImageVector = Icons.Default.Straighten,
     iconTint: Color = Color(0xFFFFD54F),
     onReverseAzimuthClick: (() -> Unit)? = null,
     onSetAsMyLocation: (() -> Unit)? = null
 ) {
+    val isNarrow = widthFraction < 0.9f
     Surface(
         modifier = modifier
-            .fillMaxWidth()
-            .padding(16.dp)
+            .fillMaxWidth(widthFraction)
+            .padding(if (isNarrow) 10.dp else 16.dp)
             .testTag("ruler_overlay"),
         color = Color(0xFF1E2833),
         shape = RoundedCornerShape(12.dp),
         tonalElevation = 6.dp,
         shadowElevation = 6.dp
     ) {
-        Column(modifier = Modifier.padding(14.dp)) {
+        Column(modifier = Modifier.padding(if (isNarrow) 10.dp else 14.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f, fill = false)) {
-                    Icon(icon, contentDescription = null, tint = iconTint)
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Icon(icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(if (isNarrow) 18.dp else 24.dp))
+                    Spacer(modifier = Modifier.width(if (isNarrow) 6.dp else 8.dp))
                     Text(
                         text = title,
                         fontWeight = FontWeight.Bold,
                         color = Color.White,
-                        fontSize = 13.sp,
+                        fontSize = if (isNarrow) 12.sp else 13.sp,
                         maxLines = 1
                     )
                 }
@@ -68,10 +70,10 @@ fun RulerOverlay(
                         Button(
                             onClick = onSetAsMyLocation,
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF9800)),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            contentPadding = PaddingValues(horizontal = if (isNarrow) 6.dp else 8.dp, vertical = 2.dp),
                             modifier = Modifier
                                 .height(28.dp)
-                                .padding(end = 6.dp)
+                                .padding(end = 4.dp)
                                 .testTag("set_my_location_btn")
                         ) {
                             Icon(
@@ -80,7 +82,7 @@ fun RulerOverlay(
                                 tint = Color.Black,
                                 modifier = Modifier.size(14.dp)
                             )
-                            Spacer(modifier = Modifier.width(4.dp))
+                            Spacer(modifier = Modifier.width(3.dp))
                             Text("Я здесь", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
                     }
@@ -90,44 +92,50 @@ fun RulerOverlay(
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(if (isNarrow) 6.dp else 8.dp))
 
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("РАССТОЯНИЕ", color = Color(0xFF90A4AE), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f)) {
+                    Text("РАССТОЯНИЕ", color = Color(0xFF90A4AE), fontSize = if (isNarrow) 9.sp else 10.sp, fontWeight = FontWeight.Bold)
                     Text(
                         text = rulerState.formatDistance(),
                         color = Color(0xFF81C784),
-                        fontSize = 18.sp,
+                        fontSize = if (isNarrow) 15.sp else 18.sp,
                         fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1
                     )
                 }
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    val unitLabel = if (angleUnit == AngleUnit.DEGREES_360) "АЗИМУТ (360°)" else "АЗИМУТ (60-00)"
-                    Text(unitLabel, color = Color(0xFF90A4AE), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f)) {
+                    val unitLabel = if (angleUnit == AngleUnit.DEGREES_360) {
+                        if (isNarrow) "АЗИМУТ" else "АЗИМУТ (360°)"
+                    } else {
+                        if (isNarrow) "АЗИМУТ" else "АЗИМУТ (60-00)"
+                    }
+                    Text(unitLabel, color = Color(0xFF90A4AE), fontSize = if (isNarrow) 9.sp else 10.sp, fontWeight = FontWeight.Bold)
                     Text(
                         text = rulerState.formatAzimuth(angleUnit),
                         color = Color(0xFFFFD54F),
-                        fontSize = 18.sp,
+                        fontSize = if (isNarrow) 15.sp else 18.sp,
                         fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1
                     )
                 }
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("ОБРАТНЫЙ АЗ.", color = Color(0xFF90A4AE), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        Text("ОБР. АЗ.", color = Color(0xFF90A4AE), fontSize = if (isNarrow) 9.sp else 10.sp, fontWeight = FontWeight.Bold)
                         if (onReverseAzimuthClick != null) {
-                            Spacer(modifier = Modifier.width(2.dp))
+                            Spacer(modifier = Modifier.width(1.dp))
                             IconButton(
                                 onClick = onReverseAzimuthClick,
-                                modifier = Modifier.size(22.dp).testTag("reverse_azimuth_button")
+                                modifier = Modifier.size(if (isNarrow) 18.dp else 22.dp).testTag("reverse_azimuth_button")
                             ) {
                                 Icon(
                                     Icons.Default.SwapCalls,
                                     contentDescription = "Обратный азимут",
                                     tint = Color(0xFFFF8A65),
-                                    modifier = Modifier.size(16.dp)
+                                    modifier = Modifier.size(if (isNarrow) 14.dp else 16.dp)
                                 )
                             }
                         }
@@ -135,9 +143,10 @@ fun RulerOverlay(
                     Text(
                         text = rulerState.formatReverseAzimuth(angleUnit),
                         color = Color(0xFFFF8A65),
-                        fontSize = 18.sp,
+                        fontSize = if (isNarrow) 15.sp else 18.sp,
                         fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1
                     )
                 }
             }
