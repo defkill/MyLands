@@ -68,4 +68,50 @@ class DataExchangeSecurityTest {
         )
         assertEquals(File(cacheDir, "passwd").canonicalPath, temp.canonicalPath)
     }
+
+    @Test
+    fun `restoreFullBackup rejects path traversal zip entries and unknown sections`() {
+        kotlinx.coroutines.runBlocking {
+            val context = ApplicationProvider.getApplicationContext<Context>()
+            val tileManager = com.example.map.TileManager(context)
+
+            val zipFile = File(context.cacheDir, "malicious_backup.zip")
+            java.util.zip.ZipOutputStream(java.io.FileOutputStream(zipFile)).use { zos ->
+                // Valid map entry
+                zos.putNextEntry(java.util.zip.ZipEntry("maps/valid.mbtiles"))
+                zos.write("safe content".toByteArray())
+                zos.closeEntry()
+
+                // Path traversal attempt targeting root filesDir or escape
+                zos.putNextEntry(java.util.zip.ZipEntry("maps/../../evil.txt"))
+                zos.write("malicious payload".toByteArray())
+                zos.closeEntry()
+
+                // Path traversal attempt in cache prefix
+                zos.putNextEntry(java.util.zip.ZipEntry("cache/../../cache_escape.png"))
+                zos.write("malicious payload 2".toByteArray())
+                zos.closeEntry()
+
+                // Unknown prefix
+                zos.putNextEntry(java.util.zip.ZipEntry("unknown/forbidden.txt"))
+                zos.write("unknown section".toByteArray())
+                zos.closeEntry()
+            }
+
+            val restoredCount = tileManager.restoreFullBackup(zipFile)
+            assertEquals("Only the safe valid entry should be restored", 1, restoredCount)
+
+            val evilFile = File(context.filesDir, "evil.txt")
+            assertFalse("evil.txt must not exist outside target dir", evilFile.exists())
+
+            val cacheEscapeFile = File(context.filesDir, "cache_escape.png")
+            assertFalse("cache_escape.png must not exist outside target dir", cacheEscapeFile.exists())
+
+            val validFile = File(File(context.filesDir, "maps"), "valid.mbtiles")
+            assertTrue("Valid map file should exist", validFile.exists())
+
+            zipFile.delete()
+            validFile.delete()
+        }
+    }
 }

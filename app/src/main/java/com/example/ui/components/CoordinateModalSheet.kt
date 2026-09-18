@@ -44,10 +44,17 @@ fun CoordinateModalSheet(
     onShowQr: () -> Unit,
     /** Opens the scanner to receive a point from another device's screen. */
     onScanQr: () -> Unit,
+    onAddWaypoint: ((String, Double, Double) -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
-    var activeTab by remember { mutableStateOf(0) } // 0: All Coordinates, 1: Coordinate Jump / Input
+    var activeTab by remember { mutableStateOf(0) } // 0: All Coordinates, 1: Text Recognition, 2: Coordinate Jump / Input
+
+    // State for Text Recognition tab
+    var recognitionText by remember { mutableStateOf("") }
+    var parsedPoints by remember { mutableStateOf<List<com.example.geodesy.ParsedCoordinatePoint>>(emptyList()) }
+    var parseWarnings by remember { mutableStateOf<List<String>>(emptyList()) }
+    var parseError by remember { mutableStateOf<String?>(null) }
 
     // Input state for coordinate jump
     var inputSystem by remember { mutableStateOf(CoordinateSystem.MGRS) }
@@ -130,12 +137,17 @@ fun CoordinateModalSheet(
                 Tab(
                     selected = activeTab == 0,
                     onClick = { activeTab = 0 },
-                    text = { Text("Все СК точки", fontWeight = FontWeight.SemiBold) }
+                    text = { Text("Все СК", fontWeight = FontWeight.SemiBold, fontSize = 13.sp) }
                 )
                 Tab(
                     selected = activeTab == 1,
                     onClick = { activeTab = 1 },
-                    text = { Text("Переход по координатам", fontWeight = FontWeight.SemiBold) }
+                    text = { Text("Из текста", fontWeight = FontWeight.SemiBold, fontSize = 13.sp) }
+                )
+                Tab(
+                    selected = activeTab == 2,
+                    onClick = { activeTab = 2 },
+                    text = { Text("Переход", fontWeight = FontWeight.SemiBold, fontSize = 13.sp) }
                 )
             }
 
@@ -209,6 +221,212 @@ fun CoordinateModalSheet(
                     Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(20.dp))
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("Скопировать карточку (Донесение)", fontWeight = FontWeight.Bold)
+                }
+
+            } else if (activeTab == 1) {
+                // Free-Text Recognition Tab
+                Text(
+                    text = "Вставьте любой произвольный текст со сводками, боевыми донесениями или координатами:",
+                    color = Color(0xFFB0BEC5),
+                    fontSize = 13.sp
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+
+                OutlinedTextField(
+                    value = recognitionText,
+                    onValueChange = {
+                        recognitionText = it
+                        parseError = null
+                    },
+                    placeholder = {
+                        Text(
+                            "Например:\n" +
+                            "36U UA 24182 91607\n" +
+                            "X=5412345 Y=6312345\n" +
+                            "Ш49.64 Д36.97\n" +
+                            "48°27'53.2\"N 35°02'46.1\"E\n" +
+                            "или донесение целиком...",
+                            color = Color(0xFF607D8B),
+                            fontSize = 12.sp
+                        )
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(140.dp)
+                        .testTag("recognition_input_field"),
+                    shape = RoundedCornerShape(10.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Color(0xFF81C784),
+                        unfocusedBorderColor = Color(0xFF37474F),
+                        focusedContainerColor = Color(0xFF1E2631),
+                        unfocusedContainerColor = Color(0xFF1E2631)
+                    )
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            val clipItem = clipboard.primaryClip?.getItemAt(0)?.text?.toString()
+                            if (!clipItem.isNullOrBlank()) {
+                                recognitionText = clipItem
+                                parseError = null
+                            } else {
+                                Toast.makeText(context, "Буфер обмена пуст", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        modifier = Modifier.weight(1f).height(44.dp),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Icon(Icons.Default.ContentPaste, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Вставить", fontSize = 13.sp)
+                    }
+
+                    Button(
+                        onClick = {
+                            if (recognitionText.isBlank()) {
+                                parseError = "Введите или вставьте текст"
+                                parsedPoints = emptyList()
+                                parseWarnings = emptyList()
+                            } else {
+                                val res = com.example.geodesy.FreeTextCoordinateParser.parse(recognitionText)
+                                parsedPoints = res.points
+                                parseWarnings = res.warnings
+                                if (res.points.isEmpty() && res.warnings.isEmpty()) {
+                                    parseError = "Координаты в тексте не обнаружены"
+                                } else {
+                                    parseError = null
+                                }
+                            }
+                        },
+                        modifier = Modifier.weight(1.5f).height(44.dp).testTag("parse_text_button"),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Распознать", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    }
+                }
+
+                parseError?.let { err ->
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(text = err, color = Color(0xFFEF5350), fontSize = 13.sp)
+                }
+
+                if (parseWarnings.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color(0xFF3E2723), RoundedCornerShape(8.dp))
+                            .padding(10.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Warning, contentDescription = null, tint = Color(0xFFFFB74D), modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Внимание:", color = Color(0xFFFFB74D), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                        parseWarnings.forEach { w ->
+                            Text("• $w", color = Color(0xFFFFCCBC), fontSize = 12.sp)
+                        }
+                    }
+                }
+
+                if (parsedPoints.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Text(
+                        text = "Найдено точек: ${parsedPoints.size}",
+                        color = Color(0xFF81C784),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    parsedPoints.forEachIndexed { index, pt ->
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
+                            color = Color(0xFF1B222C),
+                            shape = RoundedCornerShape(10.dp),
+                            border = if (pt.outsideUkraine) androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFFB74D)) else null
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "${index + 1}. ${pt.label}",
+                                        color = Color(0xFF81C784),
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    if (pt.outsideUkraine) {
+                                        Text(
+                                            text = "Вне Украины",
+                                            color = Color(0xFFFFB74D),
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = String.format(Locale.US, "%.5f, %.5f", pt.lat, pt.lon),
+                                    color = Color.White,
+                                    fontSize = 14.sp,
+                                    fontFamily = FontFamily.Monospace
+                                )
+
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.End,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    if (onAddWaypoint != null) {
+                                        TextButton(
+                                            onClick = {
+                                                onAddWaypoint("Точка ${index + 1}", pt.lat, pt.lon)
+                                                Toast.makeText(context, "Точка добавлена в список", Toast.LENGTH_SHORT).show()
+                                            },
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                        ) {
+                                            Icon(Icons.Default.BookmarkBorder, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Сохранить", fontSize = 12.sp)
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.width(4.dp))
+
+                                    Button(
+                                        onClick = {
+                                            onJumpToPoint(GeoPoint(pt.lat, pt.lon))
+                                            onDismiss()
+                                        },
+                                        modifier = Modifier.height(34.dp),
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1976D2)),
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                                    ) {
+                                        Icon(Icons.Default.Place, contentDescription = null, modifier = Modifier.size(14.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Перейти", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
 
             } else {

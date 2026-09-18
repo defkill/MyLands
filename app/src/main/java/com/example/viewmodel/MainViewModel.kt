@@ -1442,6 +1442,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         tileManager.packCacheToOrntpack(outputFile)
     }
 
+    // --- Full Map Backup & Restore ---
+    suspend fun calculateFullMapBackupSize(): Long = withContext(Dispatchers.IO) {
+        tileManager.calculateFullBackupSize()
+    }
+
+    suspend fun packFullMapBackup(
+        outputFile: java.io.File,
+        onProgress: ((Long, Long) -> Unit)? = null
+    ): Int = withContext(Dispatchers.IO) {
+        tileManager.packFullBackup(outputFile, onProgress)
+    }
+
+    suspend fun restoreFullMapBackup(
+        zipFile: java.io.File,
+        onProgress: ((Int, Int) -> Unit)? = null
+    ): Int = withContext(Dispatchers.IO) {
+        val count = tileManager.restoreFullBackup(zipFile, onProgress)
+        if (count > 0) {
+            restoreSavedOfflineMaps()
+        }
+        count
+    }
+
     fun resumeSensors() {
         orientationManager.start()
         locationTracker.startListening()

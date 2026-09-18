@@ -249,6 +249,83 @@ fun DataExchangeDialog(
         }
     }
 
+    val restoreBackupLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            coroutineScope.launch {
+                isProcessing = true
+                copyProgress = 0f
+                copyStatusText = "Подготовка к восстановлению..."
+                val tempZip = File(context.cacheDir, "temp_restore_backup.zip")
+                try {
+                    val sourceSize = withContext(Dispatchers.IO) {
+                        context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { c ->
+                            val idx = c.getColumnIndex(OpenableColumns.SIZE)
+                            if (c.moveToFirst() && idx >= 0 && !c.isNull(idx)) c.getLong(idx) else -1L
+                        } ?: -1L
+                    }
+                    val freeBytes = context.filesDir.usableSpace
+                    if (sourceSize > 0 && freeBytes < sourceSize + (50L * 1024 * 1024)) {
+                        val needMb = sourceSize / (1024 * 1024)
+                        val freeMb = freeBytes / (1024 * 1024)
+                        Toast.makeText(
+                            context,
+                            "Недостаточно места: нужно ~$needMb МБ, свободно $freeMb МБ",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        return@launch
+                    }
+
+                    withContext(Dispatchers.IO) {
+                        context.contentResolver.openInputStream(uri)?.use { input ->
+                            FileOutputStream(tempZip).use { output ->
+                                val buffer = ByteArray(1 shl 20)
+                                var copied = 0L
+                                while (true) {
+                                    val read = input.read(buffer)
+                                    if (read <= 0) break
+                                    output.write(buffer, 0, read)
+                                    copied += read
+                                    if (sourceSize > 0) {
+                                        val p = (copied.toFloat() / sourceSize).coerceIn(0f, 1f)
+                                        withContext(Dispatchers.Main) {
+                                            copyProgress = p
+                                            copyStatusText = "Загрузка архива: ${copied / (1024 * 1024)} из ${sourceSize / (1024 * 1024)} МБ (${(p * 100).toInt()}%)"
+                                        }
+                                    }
+                                }
+                            }
+                        } ?: throw java.io.IOException("Не удалось открыть выбранный архив")
+                    }
+
+                    copyStatusText = "Восстановление файлов карт..."
+                    val count = viewModel.restoreFullMapBackup(tempZip) { cur, total ->
+                        val p = if (total > 0) cur.toFloat() / total else 0f
+                        launch(Dispatchers.Main) {
+                            copyProgress = p
+                            copyStatusText = "Восстановление: $cur из $total файлов (${(p * 100).toInt()}%)"
+                        }
+                    }
+
+                    if (count > 0) {
+                        Toast.makeText(context, "Успешно восстановлено файлов карт: $count", Toast.LENGTH_LONG).show()
+                        onDismiss()
+                    } else {
+                        Toast.makeText(context, "В архиве не найдено карт для восстановления", Toast.LENGTH_LONG).show()
+                    }
+                } catch (e: Exception) {
+                    Toast.makeText(context, "Ошибка восстановления: ${e.localizedMessage ?: e.message}", Toast.LENGTH_LONG).show()
+                } finally {
+                    tempZip.delete()
+                    isProcessing = false
+                    copyProgress = 0f
+                    copyStatusText = null
+                }
+            }
+        }
+    }
+
     // File picker launcher for importing GPX/KML
     val importFileLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -536,6 +613,79 @@ fun DataExchangeDialog(
                         )
 
                         // Save / Share maps
+                        OutlinedButton(
+                            onClick = {
+                                coroutineScope.launch {
+                                    isProcessing = true
+                                    copyProgress = 0f
+                                    copyStatusText = "Оценка размера резервной копии..."
+                                    try {
+                                        val totalBytes = viewModel.calculateFullMapBackupSize()
+                                        if (totalBytes <= 0L) {
+                                            Toast.makeText(context, "Нет карт для резервной копии.", Toast.LENGTH_LONG).show()
+                                            return@launch
+                                        }
+
+                                        val freeBytes = context.cacheDir.usableSpace
+                                        if (freeBytes < totalBytes + (50L * 1024 * 1024)) {
+                                            val needMb = totalBytes / (1024 * 1024)
+                                            val freeMb = freeBytes / (1024 * 1024)
+                                            Toast.makeText(
+                                                context,
+                                                "Недостаточно места: нужно ~$needMb МБ, свободно $freeMb МБ",
+                                                Toast.LENGTH_LONG
+                                            ).show()
+                                            return@launch
+                                        }
+
+                                        val backupFile = File(context.cacheDir, "maps_full_backup.zip")
+                                        copyStatusText = "Упаковка резервной копии..."
+                                        val count = viewModel.packFullMapBackup(backupFile) { written, total ->
+                                            val p = if (total > 0) (written.toFloat() / total).coerceIn(0f, 1f) else 0f
+                                            val writtenMb = written / (1024 * 1024)
+                                            val totalMb = total / (1024 * 1024)
+                                            launch(Dispatchers.Main) {
+                                                copyProgress = p
+                                                copyStatusText = "Архивация: $writtenMb из $totalMb МБ (${(p * 100).toInt()}%)"
+                                            }
+                                        }
+
+                                        if (count > 0) {
+                                            pendingSaveFile = backupFile
+                                            val stamp = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US).format(java.util.Date())
+                                            saveMapLauncher.launch("maps_backup_$stamp.zip")
+                                        } else {
+                                            Toast.makeText(context, "Нет карт для резервной копии.", Toast.LENGTH_LONG).show()
+                                        }
+                                    } catch (e: Exception) {
+                                        Toast.makeText(context, "Ошибка резервного копирования: ${e.message}", Toast.LENGTH_SHORT).show()
+                                    } finally {
+                                        isProcessing = false
+                                        copyProgress = 0f
+                                        copyStatusText = null
+                                    }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth().testTag("full_backup_button"),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
+                        ) {
+                            Icon(Icons.Default.Backup, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color(0xFF4FC3F7))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Полная резервная копия карт")
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                restoreBackupLauncher.launch(arrayOf("application/zip", "application/octet-stream", "*/*"))
+                            },
+                            modifier = Modifier.fillMaxWidth().testTag("restore_backup_button"),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
+                        ) {
+                            Icon(Icons.Default.SettingsBackupRestore, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color(0xFF4FC3F7))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Восстановить из резервной копии")
+                        }
+
                         OutlinedButton(
                             onClick = {
                                 coroutineScope.launch {

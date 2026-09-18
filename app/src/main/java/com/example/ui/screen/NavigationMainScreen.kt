@@ -1180,6 +1180,13 @@ fun NavigationMainScreen(
                 viewModel.closeCoordinateModal()
                 showQrScanner = true
             },
+            onAddWaypoint = { name, lat, lon ->
+                viewModel.addWaypointAt(
+                    name = name,
+                    latitude = lat,
+                    longitude = lon
+                )
+            },
             onDismiss = { viewModel.closeCoordinateModal() }
         )
     }

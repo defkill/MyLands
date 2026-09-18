@@ -423,4 +423,129 @@ class TileManager(private val context: Context) {
         }
         count
     }
+
+    /**
+     * Calculates total uncompressed size (in bytes) of all map sources.
+     */
+    fun calculateFullBackupSize(): Long {
+        val sections = listOf(
+            baseCacheDir,
+            File(context.filesDir, "maps"),
+            File(context.filesDir, "packages")
+        )
+        var totalBytes = 0L
+        for (dir in sections) {
+            if (!dir.exists()) continue
+            dir.walkTopDown().filter { it.isFile }.forEach { file ->
+                totalBytes += file.length()
+            }
+        }
+        return totalBytes
+    }
+
+    /**
+     * Packs all maps into a single full backup archive (online cache + mbtiles + offline packages).
+     */
+    suspend fun packFullBackup(
+        outputFile: File,
+        onProgress: ((currentBytes: Long, totalBytes: Long) -> Unit)? = null
+    ): Int = withContext(Dispatchers.IO) {
+        val sections = listOf(
+            "cache/" to baseCacheDir,
+            "maps/" to File(context.filesDir, "maps"),
+            "packages/" to File(context.filesDir, "packages")
+        )
+
+        var totalBytes = 0L
+        for ((_, dir) in sections) {
+            if (!dir.exists()) continue
+            dir.walkTopDown().filter { it.isFile }.forEach { file ->
+                totalBytes += file.length()
+            }
+        }
+
+        if (totalBytes == 0L) return@withContext 0
+
+        var count = 0
+        var writtenBytes = 0L
+        val buffer = ByteArray(64 * 1024)
+
+        val zipOut = java.util.zip.ZipOutputStream(java.io.FileOutputStream(outputFile).buffered())
+        try {
+            for ((prefix, dir) in sections) {
+                if (!dir.exists()) continue
+                dir.walkTopDown().filter { it.isFile }.forEach { file ->
+                    val relativePath = prefix + file.relativeTo(dir).path
+                    val entry = java.util.zip.ZipEntry(relativePath)
+                    zipOut.putNextEntry(entry)
+                    file.inputStream().buffered().use { input ->
+                        while (true) {
+                            val read = input.read(buffer)
+                            if (read <= 0) break
+                            zipOut.write(buffer, 0, read)
+                            writtenBytes += read
+                            onProgress?.invoke(writtenBytes, totalBytes)
+                        }
+                    }
+                    zipOut.closeEntry()
+                    count++
+                }
+            }
+        } finally {
+            zipOut.close()
+        }
+        count
+    }
+
+    /**
+     * Restores full backup archive by extracting entries according to section prefixes.
+     * Guaranteed Path Traversal protection.
+     */
+    suspend fun restoreFullBackup(
+        zipFile: File,
+        onProgress: ((currentEntries: Int, totalEntries: Int) -> Unit)? = null
+    ): Int = withContext(Dispatchers.IO) {
+        var count = 0
+        val buffer = ByteArray(64 * 1024)
+        java.util.zip.ZipFile(zipFile).use { zip ->
+            val totalEntries = zip.size()
+            var currentEntryIndex = 0
+            val entries = zip.entries()
+            while (entries.hasMoreElements()) {
+                val entry = entries.nextElement()
+                currentEntryIndex++
+                onProgress?.invoke(currentEntryIndex, totalEntries)
+                if (entry.isDirectory) continue
+
+                val (targetRoot, relativePath) = when {
+                    entry.name.startsWith("cache/") -> baseCacheDir to entry.name.removePrefix("cache/")
+                    entry.name.startsWith("maps/") -> File(context.filesDir, "maps") to entry.name.removePrefix("maps/")
+                    entry.name.startsWith("packages/") -> File(context.filesDir, "packages") to entry.name.removePrefix("packages/")
+                    else -> continue // Unknown section - skip safely
+                }
+
+                val targetFile = File(targetRoot, relativePath)
+                if (!targetFile.canonicalPath.startsWith(targetRoot.canonicalPath + File.separator)) {
+                    Log.w(TAG, "Blocked path traversal in backup entry: ${entry.name}")
+                    continue
+                }
+
+                targetFile.parentFile?.mkdirs()
+                zip.getInputStream(entry).buffered().use { input ->
+                    targetFile.outputStream().buffered().use { output ->
+                        while (true) {
+                            val read = input.read(buffer)
+                            if (read <= 0) break
+                            output.write(buffer, 0, read)
+                        }
+                    }
+                }
+                count++
+            }
+        }
+        if (count > 0) {
+            clearMemoryCache()
+        }
+        count
+    }
 }
