@@ -165,7 +165,7 @@ class VectorTileRasterizer(
         offsetY: Int = 0
     ): Bitmap? {
         val bitmap = try {
-            Bitmap.createBitmap(tileSizePx, tileSizePx, Bitmap.Config.ARGB_8888)
+            Bitmap.createBitmap(tileSizePx, tileSizePx, Bitmap.Config.RGB_565)
         } catch (e: OutOfMemoryError) {
             Log.e("VectorTileRasterizer", "OOM creating tile bitmap", e)
             return null

@@ -1,5 +1,6 @@
 package com.example.map.vector
 
+import android.util.Log
 import java.io.ByteArrayInputStream
 import java.io.InputStream
 import java.util.zip.GZIPInputStream
@@ -84,13 +85,22 @@ object MvtParser {
     private const val WIRETYPE_FIXED32 = 5
 
     /**
-     * Uncompresses gzip if present and parses byte array into a [VectorTile].
+     * Uncompresses gzip if present and parses byte array into a [VectorTile], or returns null on failure/oversized data.
      */
-    fun parse(data: ByteArray): VectorTile {
+    fun parse(data: ByteArray): VectorTile? {
         if (data.isEmpty()) return VectorTile(emptyList())
-        val uncompressed = decompressGzipIfNeeded(data)
-        val stream = ByteArrayInputStream(uncompressed)
-        return parseTile(stream, uncompressed.size)
+        return try {
+            val uncompressed = decompressGzipIfNeeded(data)
+            if (uncompressed.size > 20 * 1024 * 1024) {
+                Log.w("MvtParser", "Tile too large after decompression: ${uncompressed.size} bytes, skipping")
+                return null
+            }
+            val stream = ByteArrayInputStream(uncompressed)
+            parseTile(stream, uncompressed.size)
+        } catch (e: Throwable) {
+            Log.e("MvtParser", "Failed to parse tile (${data.size} bytes): ${e.javaClass.simpleName}: ${e.message}", e)
+            null
+        }
     }
 
     /**

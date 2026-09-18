@@ -24,7 +24,7 @@ import java.util.zip.ZipFile
 class TileManager(private val context: Context) {
 
     private val maxMemory = (Runtime.getRuntime().maxMemory() / 1024).toInt()
-    private val cacheSize = maxMemory / 8 // 1/8th of available memory
+    private val cacheSize = maxMemory / 16 // 1/16th of available memory
 
     private val memoryCache = object : LruCache<String, Bitmap>(cacheSize) {
         override fun sizeOf(key: String, bitmap: Bitmap): Int {
@@ -34,8 +34,8 @@ class TileManager(private val context: Context) {
 
     private val fallbackCache = LruCache<String, Bitmap>(64)
 
-    // Limit concurrent vector tile parsing and rasterization to 2 threads to prevent peak memory spikes
-    private val vectorParseDispatcher = Dispatchers.IO.limitedParallelism(2)
+    // Strictly serialize vector tile parsing and rasterization to 1 thread to prevent native memory / heap spikes
+    private val vectorParseDispatcher = Dispatchers.IO.limitedParallelism(1)
 
     companion object {
         /**

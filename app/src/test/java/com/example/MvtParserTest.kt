@@ -94,17 +94,19 @@ class MvtParserTest {
     fun testGarbageDataResilience() {
         // Empty bytes
         val emptyTile = MvtParser.parse(ByteArray(0))
-        assertTrue(emptyTile.layers.isEmpty())
+        assertNotNull(emptyTile)
+        assertTrue(emptyTile!!.layers.isEmpty())
 
         // Random garbage bytes
         val garbage = byteArrayOf(0x01, 0x02, 0x03, 0x04, 0xFF.toByte(), 0xFE.toByte())
         val garbageTile = MvtParser.parse(garbage)
-        assertNotNull(garbageTile)
+        // Returns empty/fallback or null gracefully on garbage
+        assertTrue(garbageTile == null || garbageTile.layers.isEmpty())
 
         // Truncated gzip header
         val truncGzip = byteArrayOf(0x1F, 0x8B.toByte(), 0x08, 0x00)
         val truncTile = MvtParser.parse(truncGzip)
-        assertNotNull(truncTile)
+        assertTrue(truncTile == null || truncTile.layers.isEmpty())
     }
 
     @Test
