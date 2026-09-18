@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.provider.OpenableColumns
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -45,7 +46,9 @@ import com.example.map.TileSource
 import com.example.model.*
 import com.example.sensor.OrientationData
 import com.example.ui.components.*
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.example.ui.map.TacticalMapView
 import com.example.viewmodel.MainViewModel
 import java.io.File
@@ -194,44 +197,73 @@ fun NavigationMainScreen(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         if (uri != null) {
-            try {
-                val rawDisplayName = getFileNameFromUri(context, uri)
-                val isMbtiles = rawDisplayName.lowercase().endsWith(".mbtiles")
-                val safeDisplayName = sanitizeFileName(
-                    rawDisplayName,
-                    if (isMbtiles) "offline_map.mbtiles" else "imported_offline.orntpack"
-                )
-                val targetDir = if (isMbtiles) File(context.filesDir, "maps").apply { mkdirs() } else context.cacheDir
-                val tempFile = File(targetDir, safeDisplayName)
+            importScope.launch {
+                var targetFileRef: File? = null
+                try {
+                    val rawDisplayName = getFileNameFromUri(context, uri)
+                    val isMbtiles = rawDisplayName.lowercase().endsWith(".mbtiles")
+                    val safeDisplayName = sanitizeFileName(
+                        rawDisplayName,
+                        if (isMbtiles) "offline_map.mbtiles" else "imported_offline.orntpack"
+                    )
+                    val targetDir = if (isMbtiles) File(context.filesDir, "maps").apply { mkdirs() } else context.cacheDir
+                    val tempFile = File(targetDir, safeDisplayName)
+                    targetFileRef = tempFile
 
-                if (!tempFile.canonicalPath.startsWith(targetDir.canonicalPath + File.separator)) {
-                    throw SecurityException("Небезопасный путь к файлу: $rawDisplayName")
-                }
-
-                context.contentResolver.openInputStream(uri)?.use { input ->
-                    FileOutputStream(tempFile).use { output ->
-                        input.copyTo(output)
+                    if (!tempFile.canonicalPath.startsWith(targetDir.canonicalPath + File.separator)) {
+                        throw SecurityException("Небезопасный путь к файлу: $rawDisplayName")
                     }
-                }
-                val format = com.example.map.OfflineMapDetector.detectFromFile(tempFile)
 
-                if (format == OfflineMapFormat.MBTILES) {
-                    val source = viewModel.attachMbtilesFile(tempFile)
-                    if (source != null) {
+                    // Check space
+                    val sourceSize = withContext(Dispatchers.IO) {
+                        context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { c ->
+                            val idx = c.getColumnIndex(OpenableColumns.SIZE)
+                            if (c.moveToFirst() && idx >= 0 && !c.isNull(idx)) c.getLong(idx) else -1L
+                        } ?: -1L
+                    }
+
+                    val freeBytes = targetDir.usableSpace
+                    if (sourceSize > 0 && freeBytes < sourceSize + (100L * 1024 * 1024)) {
+                        val needMb = sourceSize / (1024 * 1024)
+                        val freeMb = freeBytes / (1024 * 1024)
                         Toast.makeText(
                             context,
-                            "Карта MBTiles '${source.name}' подключена!",
-                            Toast.LENGTH_SHORT
+                            "Недостаточно места: нужно ~$needMb МБ, свободно $freeMb МБ",
+                            Toast.LENGTH_LONG
                         ).show()
-                    } else {
-                        Toast.makeText(context, "Не удалось открыть .mbtiles", Toast.LENGTH_LONG).show()
+                        return@launch
                     }
-                } else {
-                    // .orntpack is MERGED into local storage rather than attached read-only, so
-                    // its tiles join everything already downloaded and future exports include
-                    // both. That is what lets a shared map file keep growing as it is passed on.
-                    importScope.launch {
-                        val added = viewModel.importOrntpackMerging(tempFile)
+
+                    withContext(Dispatchers.IO) {
+                        context.contentResolver.openInputStream(uri)?.use { input ->
+                            FileOutputStream(tempFile).use { output ->
+                                input.copyTo(output, bufferSize = 1 shl 20)
+                            }
+                        } ?: throw java.io.IOException("Не удалось открыть выбранный файл")
+                    }
+
+                    val format = withContext(Dispatchers.IO) {
+                        com.example.map.OfflineMapDetector.detectFromFile(tempFile)
+                    }
+
+                    if (format == OfflineMapFormat.MBTILES) {
+                        val source = withContext(Dispatchers.IO) {
+                            viewModel.attachMbtilesFile(tempFile)
+                        }
+                        if (source != null) {
+                            val typeLabel = if (source.metadata.isVector) "векторная" else "растровая"
+                            Toast.makeText(
+                                context,
+                                "Карта MBTiles '${source.name}' ($typeLabel) подключена!",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        } else {
+                            Toast.makeText(context, "Не удалось открыть .mbtiles", Toast.LENGTH_LONG).show()
+                        }
+                    } else {
+                        val added = withContext(Dispatchers.IO) {
+                            viewModel.importOrntpackMerging(tempFile)
+                        }
                         if (added != null) {
                             Toast.makeText(
                                 context,
@@ -248,9 +280,12 @@ fun NavigationMainScreen(
                             ).show()
                         }
                     }
+                } catch (e: Exception) {
+                    targetFileRef?.let { file ->
+                        runCatching { if (file.exists()) file.delete() }
+                    }
+                    Toast.makeText(context, "Ошибка импорта: ${e.localizedMessage ?: e.message}", Toast.LENGTH_SHORT).show()
                 }
-            } catch (e: Exception) {
-                Toast.makeText(context, "Ошибка импорта: ${e.message}", Toast.LENGTH_SHORT).show()
             }
         }
     }

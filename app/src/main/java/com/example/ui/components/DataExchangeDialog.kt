@@ -3,6 +3,7 @@ package com.example.ui.components
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.provider.OpenableColumns
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -40,6 +41,8 @@ fun DataExchangeDialog(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     var isProcessing by remember { mutableStateOf(false) }
+    var copyProgress by remember { mutableFloatStateOf(0f) }
+    var copyStatusText by remember { mutableStateOf<String?>(null) }
     var statusMessage by remember { mutableStateOf<String?>(null) }
     var selectedTab by remember { mutableIntStateOf(0) }
 
@@ -119,6 +122,9 @@ fun DataExchangeDialog(
         if (uri != null) {
             coroutineScope.launch {
                 isProcessing = true
+                copyProgress = 0f
+                copyStatusText = "Подготовка к импорту..."
+                var targetFileRef: File? = null
                 try {
                     val rawFileName = getFileName(context, uri)
                     val isMbtiles = rawFileName.lowercase().endsWith(".mbtiles")
@@ -132,37 +138,86 @@ fun DataExchangeDialog(
                         File(context.filesDir, "packages").apply { mkdirs() }
                     }
                     val targetFile = File(targetDir, safeFileName)
+                    targetFileRef = targetFile
 
                     if (!targetFile.canonicalPath.startsWith(targetDir.canonicalPath + File.separator)) {
                         throw SecurityException("Небезопасный путь к файлу: $rawFileName")
                     }
 
-                    context.contentResolver.openInputStream(uri)?.use { input ->
-                        FileOutputStream(targetFile).use { output ->
-                            input.copyTo(output)
-                        }
+                    // 1. Check source size and available disk space
+                    val sourceSize = withContext(Dispatchers.IO) {
+                        context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { c ->
+                            val idx = c.getColumnIndex(OpenableColumns.SIZE)
+                            if (c.moveToFirst() && idx >= 0 && !c.isNull(idx)) c.getLong(idx) else -1L
+                        } ?: -1L
                     }
 
-                    val format = com.example.map.OfflineMapDetector.detectFromFile(targetFile)
+                    val freeBytes = targetDir.usableSpace
+                    if (sourceSize > 0 && freeBytes < sourceSize + (100L * 1024 * 1024)) {
+                        val needMb = sourceSize / (1024 * 1024)
+                        val freeMb = freeBytes / (1024 * 1024)
+                        Toast.makeText(
+                            context,
+                            "Недостаточно места: нужно ~$needMb МБ, свободно $freeMb МБ",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        isProcessing = false
+                        copyProgress = 0f
+                        copyStatusText = null
+                        return@launch
+                    }
+
+                    // 2. Stream copy on IO thread with progress reporting
+                    withContext(Dispatchers.IO) {
+                        context.contentResolver.openInputStream(uri)?.use { input ->
+                            FileOutputStream(targetFile).use { output ->
+                                val buffer = ByteArray(1 shl 20) // 1 MB buffer
+                                var copied = 0L
+                                while (true) {
+                                    val read = input.read(buffer)
+                                    if (read <= 0) break
+                                    output.write(buffer, 0, read)
+                                    copied += read
+                                    if (sourceSize > 0) {
+                                        val p = (copied.toFloat() / sourceSize).coerceIn(0f, 1f)
+                                        val copiedMb = copied / (1024 * 1024)
+                                        val totalMb = sourceSize / (1024 * 1024)
+                                        withContext(Dispatchers.Main) {
+                                            copyProgress = p
+                                            copyStatusText = "Копирование: $copiedMb из $totalMb МБ (${(p * 100).toInt()}%)"
+                                        }
+                                    }
+                                }
+                            }
+                        } ?: throw java.io.IOException("Не удалось открыть выбранный файл")
+                    }
+
+                    copyStatusText = "Анализ формата карты..."
+                    val format = withContext(Dispatchers.IO) {
+                        com.example.map.OfflineMapDetector.detectFromFile(targetFile)
+                    }
 
                     if (format == OfflineMapFormat.MBTILES) {
-                        val source = viewModel.attachMbtilesFile(targetFile)
+                        copyStatusText = "Подключение MBTiles базы данных..."
+                        val source = withContext(Dispatchers.IO) {
+                            viewModel.attachMbtilesFile(targetFile)
+                        }
                         if (source != null) {
+                            val typeLabel = if (source.metadata.isVector) "векторная" else "растровая"
                             Toast.makeText(
                                 context,
-                                "Карта MBTiles '${source.name}' подключена (SQLite)!",
+                                "Карта MBTiles '${source.name}' ($typeLabel) подключена!",
                                 Toast.LENGTH_LONG
                             ).show()
                             onDismiss()
                         } else {
-                            Toast.makeText(context, "Не удалось открыть .mbtiles", Toast.LENGTH_LONG).show()
+                            Toast.makeText(context, "Не удалось открыть MBTiles базу данных", Toast.LENGTH_LONG).show()
                         }
                     } else {
-                        // MERGE, do not just attach: an attached package stays separate from the
-                        // downloaded tiles, so "pack everything" silently produced a file without
-                        // it. Merging is what makes an exported map a superset of everything the
-                        // device has.
-                        val added = viewModel.importOrntpackMerging(targetFile)
+                        copyStatusText = "Интеграция пакета тайлов..."
+                        val added = withContext(Dispatchers.IO) {
+                            viewModel.importOrntpackMerging(targetFile)
+                        }
                         if (added != null) {
                             Toast.makeText(
                                 context,
@@ -181,9 +236,14 @@ fun DataExchangeDialog(
                         }
                     }
                 } catch (e: Exception) {
-                    Toast.makeText(context, "Ошибка импорта карты: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+                    targetFileRef?.let { file ->
+                        runCatching { if (file.exists()) file.delete() }
+                    }
+                    Toast.makeText(context, "Ошибка импорта карты: ${e.localizedMessage ?: e.message}", Toast.LENGTH_LONG).show()
                 } finally {
                     isProcessing = false
+                    copyProgress = 0f
+                    copyStatusText = null
                 }
             }
         }
@@ -236,7 +296,35 @@ fun DataExchangeDialog(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 if (isProcessing) {
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = Color(0xFF81C784))
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        if (copyProgress > 0f) {
+                            LinearProgressIndicator(
+                                progress = { copyProgress },
+                                modifier = Modifier.fillMaxWidth(),
+                                color = Color(0xFF81C784),
+                                trackColor = Color(0xFF2E3B4E)
+                            )
+                        } else {
+                            LinearProgressIndicator(
+                                modifier = Modifier.fillMaxWidth(),
+                                color = Color(0xFF81C784),
+                                trackColor = Color(0xFF2E3B4E)
+                            )
+                        }
+                        copyStatusText?.let { status ->
+                            Text(
+                                text = status,
+                                color = Color(0xFFB0BEC5),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
                 }
 
                 // 3 Section Tabs

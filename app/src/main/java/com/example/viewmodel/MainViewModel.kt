@@ -3,6 +3,7 @@ package com.example.viewmodel
 import android.app.Application
 import android.content.Context
 import android.os.PowerManager
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.AppDatabase
@@ -429,6 +430,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
+
+        // Scan for existing saved offline maps
+        viewModelScope.launch(Dispatchers.IO) {
+            restoreSavedOfflineMaps()
+        }
     }
 
     private companion object {
@@ -530,6 +536,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         return source
+    }
+
+    fun restoreSavedOfflineMaps() {
+        try {
+            val mapsDir = File(getApplication<Application>().filesDir, "maps")
+            if (mapsDir.exists() && mapsDir.isDirectory) {
+                val mbtilesFiles = mapsDir.listFiles { f -> f.isFile && f.name.lowercase().endsWith(".mbtiles") }
+                if (!mbtilesFiles.isNullOrEmpty()) {
+                    val newSources = mutableListOf<TileSource>()
+                    for (file in mbtilesFiles) {
+                        val src = MbtilesTileSource.create(file)
+                        if (src != null) {
+                            newSources.add(src)
+                        }
+                    }
+                    if (newSources.isNotEmpty()) {
+                        val current = _availableTileSources.value.toMutableList()
+                        current.removeAll { curr -> newSources.any { it.id == curr.id } }
+                        current.addAll(newSources)
+                        _availableTileSources.value = current
+
+                        val firstSource = newSources.first() as MbtilesTileSource
+                        tileManager.attachMbtiles(firstSource.file)
+                        _activeMbtiles.value = firstSource
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w("MainViewModel", "Error restoring saved offline maps: ${e.message}")
+        }
     }
 
     // --- Elevation (SRTM/HGT), line of sight, route profile ---
