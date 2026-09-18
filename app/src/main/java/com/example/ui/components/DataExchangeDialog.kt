@@ -383,8 +383,10 @@ fun DataExchangeDialog(
                                     Icon(Icons.Default.Storage, contentDescription = null, tint = Color(0xFF81C784), modifier = Modifier.size(20.dp))
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Column(modifier = Modifier.weight(1f)) {
+                                        val isVec = activeMbtiles?.metadata?.isVector == true
+                                        val typeLabel = if (isVec) "Векторная (MVT/Shortbread)" else "Растровая"
                                         Text("MBTiles: ${activeMbtiles?.name}", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                        Text("Зум: ${activeMbtiles?.minZoom}..${activeMbtiles?.maxZoom} • Прямой SQLite доступ", color = Color(0xFFB0BEC5), fontSize = 10.sp)
+                                        Text("Зум: ${activeMbtiles?.minZoom}..${activeMbtiles?.maxZoom} • $typeLabel", color = Color(0xFFB0BEC5), fontSize = 10.sp)
                                     }
                                     if (activeTileSource.id == activeMbtiles?.id) {
                                         Icon(Icons.Default.CheckCircle, contentDescription = "Активна", tint = Color(0xFF81C784), modifier = Modifier.size(18.dp))

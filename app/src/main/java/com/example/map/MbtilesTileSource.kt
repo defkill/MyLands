@@ -19,12 +19,18 @@ data class MbtilesMetadata(
     val bounds: String? = null,
     val center: String? = null,
     val description: String? = null
-)
+) {
+    val isVector: Boolean
+        get() = format.lowercase().let { it == "pbf" || it == "mvt" }
+}
 
 /**
  * Direct SQLite-based TileSource adapter for standard Mapbox/OSGeo .mbtiles files.
  *
- * Implements direct tile streaming without unzipping/unpacking.
+ * Supports both raster (PNG, JPG, WEBP) and vector (Mapbox Vector Tile PBF / Shortbread) datasets.
+ * Implements direct tile streaming without unzipping/unpacking, overzoom up to maxZoom + 4,
+ * and high-performance tactical rasterization for vector tiles.
+ *
  * Tile coordinates in MBTiles use the TMS schema where tile_row is inverted:
  * tile_row = (1 shl zoom_level) - 1 - y_xyz
  */
@@ -36,11 +42,13 @@ class MbtilesTileSource(
     name = metadata.name.ifBlank { file.nameWithoutExtension },
     type = MapTileType.MBTILES,
     urlTemplate = "",
-    maxZoom = metadata.maxZoom,
+    maxZoom = if (metadata.isVector) (metadata.maxZoom + 4).coerceAtMost(22) else metadata.maxZoom,
     minZoom = metadata.minZoom
 ), Closeable {
 
     private var db: SQLiteDatabase? = null
+    private val vectorRasterizer by lazy { com.example.map.vector.VectorTileRasterizer(512) }
+    private var hasLoggedVectorDebug = false
 
     init {
         openDb()
@@ -59,6 +67,9 @@ class MbtilesTileSource(
     /**
      * Reads a tile bitmap directly from MBTiles SQLite table 'tiles'.
      *
+     * Supports both raster images and vector MVT/PBF tiles with automatic
+     * sub-pixel overzoom and decompression.
+     *
      * TMS inversion: tile_row = (2^zoom - 1) - y
      */
     fun getTileBitmap(zoom: Int, x: Int, y: Int): Bitmap? {
@@ -66,25 +77,91 @@ class MbtilesTileSource(
         val database = db ?: return null
         if (!database.isOpen) return null
 
+        val isVector = metadata.isVector
+        val nativeMaxZoom = metadata.maxZoom
+
+        // Calculate overzoom parameters if zoom level exceeds native dataset maxZoom
+        val targetZoom: Int
+        val targetX: Int
+        val targetY: Int
+        val offsetX: Int
+        val offsetY: Int
+
+        if (isVector && zoom > nativeMaxZoom) {
+            val zoomDiff = zoom - nativeMaxZoom
+            if (zoomDiff > 4) return null // Limit overzoom to maxZoom + 4
+            targetZoom = nativeMaxZoom
+            targetX = x ushr zoomDiff
+            targetY = y ushr zoomDiff
+            offsetX = x - (targetX shl zoomDiff)
+            offsetY = y - (targetY shl zoomDiff)
+        } else {
+            targetZoom = zoom
+            targetX = x
+            targetY = y
+            offsetX = 0
+            offsetY = 0
+        }
+
         // Invert tile_row according to TMS standard
-        val tmsRow = (1 shl zoom) - 1 - y
+        val tmsRow = (1 shl targetZoom) - 1 - targetY
 
         return try {
             database.rawQuery(
                 "SELECT tile_data FROM tiles WHERE zoom_level = ? AND tile_column = ? AND tile_row = ? LIMIT 1",
-                arrayOf(zoom.toString(), x.toString(), tmsRow.toString())
+                arrayOf(targetZoom.toString(), targetX.toString(), tmsRow.toString())
             ).use { cursor ->
                 if (cursor.moveToFirst()) {
                     val blob = cursor.getBlob(0)
                     if (blob != null && blob.isNotEmpty()) {
-                        BitmapFactory.decodeByteArray(blob, 0, blob.size)
+                        if (isVector) {
+                            val vectorTile = com.example.map.vector.MvtParser.parse(blob)
+
+                            // Diagnostic introspection for Stage 1 (Logcat Tag: VectorTileDebug)
+                            if (!hasLoggedVectorDebug && vectorTile.layers.isNotEmpty()) {
+                                hasLoggedVectorDebug = true
+                                logVectorSchemaIntrospection(targetZoom, targetX, targetY, vectorTile)
+                            }
+
+                            vectorRasterizer.rasterize(
+                                tile = vectorTile,
+                                zoom = zoom,
+                                parentZoom = targetZoom,
+                                offsetX = offsetX,
+                                offsetY = offsetY
+                            )
+                        } else {
+                            BitmapFactory.decodeByteArray(blob, 0, blob.size)
+                        }
                     } else null
                 } else null
             }
         } catch (e: Exception) {
-            Log.w("MbtilesTileSource", "Error querying tile Z=$zoom X=$x Y=$y (TMS=$tmsRow): ${e.message}")
+            Log.w("MbtilesTileSource", "Error querying tile Z=$zoom X=$x Y=$y (targetZ=$targetZoom targetX=$targetX TMS=$tmsRow): ${e.message}")
             null
         }
+    }
+
+    private fun logVectorSchemaIntrospection(
+        zoom: Int,
+        x: Int,
+        y: Int,
+        tile: com.example.map.vector.VectorTile
+    ) {
+        val sb = StringBuilder()
+        sb.appendLine("=== VectorTileDebug: Introspection for Tile Z=$zoom X=$x Y=$y ===")
+        sb.appendLine("Total Layers: ${tile.layers.size}")
+        for (layer in tile.layers) {
+            val sampleFeature = layer.features.firstOrNull()
+            val sampleKeys = sampleFeature?.attributes?.keys?.take(10)?.joinToString(", ") ?: "none"
+            val sampleVals = sampleFeature?.attributes?.entries?.take(5)?.joinToString("; ") { "${it.key}=${it.value}" } ?: "none"
+            sb.appendLine(
+                " • Layer: '${layer.name}' (version=${layer.version}, extent=${layer.extent}, features=${layer.features.size}, " +
+                        "sampleGeom=${sampleFeature?.geometryType}, keys=[$sampleKeys], sampleValues=[$sampleVals])"
+            )
+        }
+        sb.appendLine("==================================================================")
+        Log.i("VectorTileDebug", sb.toString())
     }
 
     /**
