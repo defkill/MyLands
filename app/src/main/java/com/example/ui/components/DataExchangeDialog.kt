@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import com.example.map.OfflineMapFormat
+import com.example.service.MapBackupService
 import com.example.viewmodel.MainViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -50,6 +51,11 @@ fun DataExchangeDialog(
     val hasOfflineOrntpack by viewModel.hasOfflineOrntpack.collectAsState()
     val activeTileSource by viewModel.activeTileSource.collectAsState()
 
+    // Backup / Restore foreground service states
+    val isBackupServiceRunning by MapBackupService.isRunning.collectAsState()
+    val backupServiceProgress by MapBackupService.progress.collectAsState()
+    val backupServiceResult by MapBackupService.lastResult.collectAsState()
+
     // Universal map file picker (.mbtiles or .orntpack / .zip) with automatic detection
     // Holds the packed file until the user has picked a destination folder.
     var pendingSaveFile by remember { mutableStateOf<File?>(null) }
@@ -73,6 +79,26 @@ fun DataExchangeDialog(
                 } catch (e: Exception) {
                     Toast.makeText(context, "Не удалось сохранить: ${e.message}", Toast.LENGTH_LONG).show()
                 }
+            }
+        }
+    }
+
+    // React to service completion or error
+    LaunchedEffect(backupServiceResult) {
+        backupServiceResult?.let { result ->
+            MapBackupService.consumeResult()
+            if (result.success) {
+                if (result.type == MapBackupService.OperationType.Backup && result.outputFile != null) {
+                    pendingSaveFile = result.outputFile
+                    val stamp = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US).format(java.util.Date())
+                    saveMapLauncher.launch("maps_backup_$stamp.zip")
+                } else if (result.type == MapBackupService.OperationType.Restore) {
+                    Toast.makeText(context, "Успешно восстановлено файлов карт: ${result.count}", Toast.LENGTH_LONG).show()
+                    onDismiss()
+                }
+            } else {
+                val msg = result.error ?: "Операция не выполнена"
+                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -254,10 +280,6 @@ fun DataExchangeDialog(
     ) { uri: Uri? ->
         if (uri != null) {
             coroutineScope.launch {
-                isProcessing = true
-                copyProgress = 0f
-                copyStatusText = "Подготовка к восстановлению..."
-                val tempZip = File(context.cacheDir, "temp_restore_backup.zip")
                 try {
                     val sourceSize = withContext(Dispatchers.IO) {
                         context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { c ->
@@ -277,50 +299,11 @@ fun DataExchangeDialog(
                         return@launch
                     }
 
-                    withContext(Dispatchers.IO) {
-                        context.contentResolver.openInputStream(uri)?.use { input ->
-                            FileOutputStream(tempZip).use { output ->
-                                val buffer = ByteArray(1 shl 20)
-                                var copied = 0L
-                                while (true) {
-                                    val read = input.read(buffer)
-                                    if (read <= 0) break
-                                    output.write(buffer, 0, read)
-                                    copied += read
-                                    if (sourceSize > 0) {
-                                        val p = (copied.toFloat() / sourceSize).coerceIn(0f, 1f)
-                                        withContext(Dispatchers.Main) {
-                                            copyProgress = p
-                                            copyStatusText = "Загрузка архива: ${copied / (1024 * 1024)} из ${sourceSize / (1024 * 1024)} МБ (${(p * 100).toInt()}%)"
-                                        }
-                                    }
-                                }
-                            }
-                        } ?: throw java.io.IOException("Не удалось открыть выбранный архив")
-                    }
-
-                    copyStatusText = "Восстановление файлов карт..."
-                    val count = viewModel.restoreFullMapBackup(tempZip) { cur, total ->
-                        val p = if (total > 0) cur.toFloat() / total else 0f
-                        launch(Dispatchers.Main) {
-                            copyProgress = p
-                            copyStatusText = "Восстановление: $cur из $total файлов (${(p * 100).toInt()}%)"
-                        }
-                    }
-
-                    if (count > 0) {
-                        Toast.makeText(context, "Успешно восстановлено файлов карт: $count", Toast.LENGTH_LONG).show()
-                        onDismiss()
-                    } else {
-                        Toast.makeText(context, "В архиве не найдено карт для восстановления", Toast.LENGTH_LONG).show()
-                    }
+                    // Start background foreground service for restore
+                    MapBackupService.startRestore(context, uri)
+                    Toast.makeText(context, "Восстановление карт запущено в фоне", Toast.LENGTH_SHORT).show()
                 } catch (e: Exception) {
-                    Toast.makeText(context, "Ошибка восстановления: ${e.localizedMessage ?: e.message}", Toast.LENGTH_LONG).show()
-                } finally {
-                    tempZip.delete()
-                    isProcessing = false
-                    copyProgress = 0f
-                    copyStatusText = null
+                    Toast.makeText(context, "Ошибка запуска восстановления: ${e.localizedMessage ?: e.message}", Toast.LENGTH_LONG).show()
                 }
             }
         }
@@ -372,16 +355,25 @@ fun DataExchangeDialog(
                     .padding(vertical = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                if (isProcessing) {
+                val showProgress = isProcessing || isBackupServiceRunning
+                if (showProgress) {
+                    val effectiveProgress = if (isBackupServiceRunning) {
+                        backupServiceProgress?.percentage ?: 0f
+                    } else copyProgress
+
+                    val effectiveStatusText = if (isBackupServiceRunning) {
+                        backupServiceProgress?.statusText ?: "Операция с картами в фоне..."
+                    } else copyStatusText
+
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(vertical = 4.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        if (copyProgress > 0f) {
+                        if (effectiveProgress > 0f) {
                             LinearProgressIndicator(
-                                progress = { copyProgress },
+                                progress = { effectiveProgress },
                                 modifier = Modifier.fillMaxWidth(),
                                 color = Color(0xFF81C784),
                                 trackColor = Color(0xFF2E3B4E)
@@ -393,13 +385,21 @@ fun DataExchangeDialog(
                                 trackColor = Color(0xFF2E3B4E)
                             )
                         }
-                        copyStatusText?.let { status ->
+                        effectiveStatusText?.let { status ->
                             Text(
                                 text = status,
                                 color = Color(0xFFB0BEC5),
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Medium
                             )
+                        }
+                        if (isBackupServiceRunning) {
+                            TextButton(
+                                onClick = { MapBackupService.cancel(context) },
+                                modifier = Modifier.align(Alignment.End)
+                            ) {
+                                Text("Отменить операцию", color = Color(0xFFFF8A80), fontSize = 11.sp)
+                            }
                         }
                     }
                 }
@@ -616,9 +616,6 @@ fun DataExchangeDialog(
                         OutlinedButton(
                             onClick = {
                                 coroutineScope.launch {
-                                    isProcessing = true
-                                    copyProgress = 0f
-                                    copyStatusText = "Оценка размера резервной копии..."
                                     try {
                                         val totalBytes = viewModel.calculateFullMapBackupSize()
                                         if (totalBytes <= 0L) {
@@ -639,33 +636,14 @@ fun DataExchangeDialog(
                                         }
 
                                         val backupFile = File(context.cacheDir, "maps_full_backup.zip")
-                                        copyStatusText = "Упаковка резервной копии..."
-                                        val count = viewModel.packFullMapBackup(backupFile) { written, total ->
-                                            val p = if (total > 0) (written.toFloat() / total).coerceIn(0f, 1f) else 0f
-                                            val writtenMb = written / (1024 * 1024)
-                                            val totalMb = total / (1024 * 1024)
-                                            launch(Dispatchers.Main) {
-                                                copyProgress = p
-                                                copyStatusText = "Архивация: $writtenMb из $totalMb МБ (${(p * 100).toInt()}%)"
-                                            }
-                                        }
-
-                                        if (count > 0) {
-                                            pendingSaveFile = backupFile
-                                            val stamp = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US).format(java.util.Date())
-                                            saveMapLauncher.launch("maps_backup_$stamp.zip")
-                                        } else {
-                                            Toast.makeText(context, "Нет карт для резервной копии.", Toast.LENGTH_LONG).show()
-                                        }
+                                        MapBackupService.startBackup(context, backupFile)
+                                        Toast.makeText(context, "Резервное копирование запущено в фоне", Toast.LENGTH_SHORT).show()
                                     } catch (e: Exception) {
                                         Toast.makeText(context, "Ошибка резервного копирования: ${e.message}", Toast.LENGTH_SHORT).show()
-                                    } finally {
-                                        isProcessing = false
-                                        copyProgress = 0f
-                                        copyStatusText = null
                                     }
                                 }
                             },
+                            enabled = !isProcessing && !isBackupServiceRunning,
                             modifier = Modifier.fillMaxWidth().testTag("full_backup_button"),
                             colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
                         ) {
@@ -678,6 +656,7 @@ fun DataExchangeDialog(
                             onClick = {
                                 restoreBackupLauncher.launch(arrayOf("application/zip", "application/octet-stream", "*/*"))
                             },
+                            enabled = !isProcessing && !isBackupServiceRunning,
                             modifier = Modifier.fillMaxWidth().testTag("restore_backup_button"),
                             colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
                         ) {

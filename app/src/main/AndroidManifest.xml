@@ -46,6 +46,11 @@
             android:foregroundServiceType="dataSync" />
 
         <service
+            android:name=".service.MapBackupService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <service
             android:name=".service.TrackingService"
             android:exported="false"
             android:foregroundServiceType="location" />
