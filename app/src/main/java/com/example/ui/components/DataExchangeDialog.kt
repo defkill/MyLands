@@ -51,8 +51,9 @@ fun DataExchangeDialog(
     val activeMbtiles by viewModel.activeMbtiles.collectAsState()
     val hasOfflineOrntpack by viewModel.hasOfflineOrntpack.collectAsState()
     val activeTileSource by viewModel.activeTileSource.collectAsState()
+    val availableTileSources by viewModel.availableTileSources.collectAsState()
 
-    // Backup / Restore foreground service states
+    // Backup / Restore / Merge foreground service states
     val isBackupServiceRunning by MapBackupService.isRunning.collectAsState()
     val backupServiceProgress by MapBackupService.progress.collectAsState()
     val backupServiceResult by MapBackupService.lastResult.collectAsState()
@@ -60,6 +61,25 @@ fun DataExchangeDialog(
     // Universal map file picker (.mbtiles or .orntpack / .zip) with automatic detection
     // Holds the packed file until the user has picked a destination folder.
     var pendingSaveFile by remember { mutableStateOf<File?>(null) }
+
+    // Multi-selection & merge states for MBTiles maps
+    var selectedMbtilesPaths by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var orderedMbtilesList by remember { mutableStateOf<List<com.example.map.MbtilesTileSource>>(emptyList()) }
+    var showMergeConfirmDialog by remember { mutableStateOf(false) }
+    var mergeOutputFileName by remember { mutableStateOf("merged_map.mbtiles") }
+    var deleteSourcesAfterMerge by remember { mutableStateOf(false) }
+    var pendingSourcesToOfferDelete by remember { mutableStateOf<List<File>?>(null) }
+    var showPostMergeDeleteDialog by remember { mutableStateOf(false) }
+
+    // Sync ordered list when availableTileSources changes
+    LaunchedEffect(availableTileSources) {
+        val currentMbtiles = availableTileSources.filterIsInstance<com.example.map.MbtilesTileSource>()
+        val existingPaths = currentMbtiles.map { it.file.absolutePath }.toSet()
+        val kept = orderedMbtilesList.filter { it.file.absolutePath in existingPaths }
+        val added = currentMbtiles.filter { m -> kept.none { it.file.absolutePath == m.file.absolutePath } }
+        orderedMbtilesList = kept + added
+        selectedMbtilesPaths = selectedMbtilesPaths.filter { it in existingPaths }.toSet()
+    }
 
     // Lets the user save the package anywhere on the device (Downloads, SD card, a folder of
     // their choice) instead of only handing it to another app through the share sheet.
@@ -95,7 +115,25 @@ fun DataExchangeDialog(
                     saveMapLauncher.launch("maps_backup_$stamp.zip")
                 } else if (result.type == MapBackupService.OperationType.Restore) {
                     Toast.makeText(context, "Успешно восстановлено файлов карт: ${result.count}", Toast.LENGTH_LONG).show()
+                    viewModel.restoreSavedOfflineMaps()
                     onDismiss()
+                } else if (result.type == MapBackupService.OperationType.Merge) {
+                    viewModel.restoreSavedOfflineMaps()
+                    if (result.outputFile != null) {
+                        val attached = viewModel.attachMbtilesFile(result.outputFile)
+                        if (attached != null) {
+                            viewModel.setTileSource(attached)
+                        }
+                    }
+                    Toast.makeText(
+                        context,
+                        "Карты успешно объединены в файл '${result.outputFile?.name}'!",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    val sourcesToDelete = pendingSourcesToOfferDelete
+                    if (!sourcesToDelete.isNullOrEmpty()) {
+                        showPostMergeDeleteDialog = true
+                    }
                 }
             } else {
                 val msg = result.error ?: "Операция не выполнена"
@@ -152,11 +190,13 @@ fun DataExchangeDialog(
                 try {
                     val rawFileName = getFileName(context, uri)
                     val isMbtiles = rawFileName.lowercase().endsWith(".mbtiles")
+                    val isGpkg = rawFileName.lowercase().endsWith(".gpkg")
+                    val isDirectMap = isMbtiles || isGpkg
                     val safeFileName = sanitizeFileName(
                         rawFileName,
-                        if (isMbtiles) "map.mbtiles" else "offline.orntpack"
+                        if (isMbtiles) "map.mbtiles" else if (isGpkg) "map.gpkg" else "offline.orntpack"
                     )
-                    val targetDir = if (isMbtiles) {
+                    val targetDir = if (isDirectMap) {
                         File(context.filesDir, "maps").apply { mkdirs() }
                     } else {
                         File(context.filesDir, "packages").apply { mkdirs() }
@@ -236,6 +276,33 @@ fun DataExchangeDialog(
                             onDismiss()
                         } else {
                             Toast.makeText(context, "Не удалось открыть MBTiles базу данных", Toast.LENGTH_LONG).show()
+                        }
+                    } else if (format == OfflineMapFormat.GEOPACKAGE) {
+                        copyStatusText = "Построение пространственного индекса (R-Tree)..."
+                        val source: com.example.map.GeoPackageTileSource? = withContext(Dispatchers.IO) {
+                            try {
+                                com.example.map.vector.GeoPackageIndexer.buildSpatialIndex(targetFile) { layerName: String, done: Int, total: Int ->
+                                    coroutineScope.launch(Dispatchers.Main) {
+                                        if (total > 0) {
+                                            copyProgress = done.toFloat() / total
+                                            copyStatusText = "Индексация: $layerName ($done/$total)"
+                                        }
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                android.util.Log.w("DataExchangeDialog", "Spatial index build issue: ${e.message}")
+                            }
+                            viewModel.attachGpkgFile(targetFile)
+                        }
+                        if (source != null) {
+                            Toast.makeText(
+                                context,
+                                "Векторная карта GeoPackage '${source.name}' подключена!",
+                                Toast.LENGTH_LONG
+                            ).show()
+                            onDismiss()
+                        } else {
+                            Toast.makeText(context, "Не удалось открыть файл GeoPackage", Toast.LENGTH_LONG).show()
                         }
                     } else {
                         copyStatusText = "Интеграция пакета тайлов..."
@@ -521,48 +588,341 @@ fun DataExchangeDialog(
                     1 -> {
                         // --- ОФЛАЙН КАРТЫ ---
                         Text(
-                            text = "ОФЛАЙН-КАРТЫ (.MBTILES И .ORNTPACK)",
+                            text = "ОФЛАЙН-КАРТЫ (.MBTILES, .GPKG И .ORNTPACK)",
                             color = Color(0xFFFFB74D),
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold
                         )
 
                         Text(
-                            text = "Поддерживаются .mbtiles (QGIS, SAS.Planet) и .orntpack. Импортированный .orntpack сливается с уже сохранёнными картами.",
+                            text = "Поддерживаются .mbtiles, векторные .gpkg (OGC GeoPackage с R-Tree) и архивы .orntpack.",
                             color = Color(0xFF90A4AE),
                             fontSize = 11.sp
                         )
 
-                        // Status indicator for active offline maps
-                        if (activeMbtiles != null) {
-                            Surface(
-                                color = Color(0x2281C784),
-                                shape = RoundedCornerShape(8.dp),
-                                border = BorderStroke(1.dp, Color(0xFF81C784)),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
+                        // GeoPackage layers section
+                        val gpkgSources = availableTileSources.filterIsInstance<com.example.map.GeoPackageTileSource>()
+                        if (gpkgSources.isNotEmpty()) {
+                            Text(
+                                text = "ИМПОРТИРОВАННЫЕ GEOPACKAGE (.GPKG) (${gpkgSources.size})",
+                                color = Color(0xFF64B5F6),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+
+                            gpkgSources.forEach { gpkg ->
+                                val isActive = activeTileSource.id == gpkg.id
+                                val sizeMb = (gpkg.file.length() / (1024.0 * 1024.0))
+
+                                Surface(
+                                    color = Color(0x15FFFFFF),
+                                    shape = RoundedCornerShape(8.dp),
+                                    border = BorderStroke(
+                                        1.dp,
+                                        if (isActive) Color(0xFF81C784) else Color(0x33FFFFFF)
+                                    ),
+                                    modifier = Modifier.fillMaxWidth()
                                 ) {
-                                    Icon(Icons.Default.Storage, contentDescription = null, tint = Color(0xFF81C784), modifier = Modifier.size(20.dp))
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        val isVec = activeMbtiles?.metadata?.isVector == true
-                                        val typeLabel = if (isVec) "Векторная (MVT/Shortbread)" else "Растровая"
-                                        Text("MBTiles: ${activeMbtiles?.name}", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                        Text("Зум: ${activeMbtiles?.minZoom}..${activeMbtiles?.maxZoom} • $typeLabel", color = Color(0xFFB0BEC5), fontSize = 10.sp)
-                                    }
-                                    if (activeTileSource.id == activeMbtiles?.id) {
-                                        Icon(Icons.Default.CheckCircle, contentDescription = "Активна", tint = Color(0xFF81C784), modifier = Modifier.size(18.dp))
-                                    } else {
-                                        TextButton(
-                                            onClick = { activeMbtiles?.let { viewModel.setTileSource(it) } },
-                                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                                    Column(modifier = Modifier.padding(8.dp)) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.fillMaxWidth()
                                         ) {
-                                            Text("Включить", color = Color(0xFF81C784), fontSize = 11.sp)
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    Text(
+                                                        text = gpkg.name,
+                                                        color = Color.White,
+                                                        fontSize = 12.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        modifier = Modifier.weight(1f, fill = false)
+                                                    )
+                                                    if (isActive) {
+                                                        Spacer(modifier = Modifier.width(4.dp))
+                                                        Surface(
+                                                            color = Color(0xFF2E7D32),
+                                                            shape = RoundedCornerShape(4.dp)
+                                                        ) {
+                                                            Text(
+                                                                "АКТИВНА",
+                                                                color = Color.White,
+                                                                fontSize = 9.sp,
+                                                                fontWeight = FontWeight.Bold,
+                                                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                                Text(
+                                                    text = "Векторные OGC слои (OSM) • ${String.format(java.util.Locale.US, "%.1f МБ", sizeMb)}",
+                                                    color = Color(0xFF90A4AE),
+                                                    fontSize = 10.sp
+                                                )
+                                            }
+                                        }
+
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.End,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            if (!isActive) {
+                                                TextButton(
+                                                    onClick = {
+                                                        viewModel.attachGpkgFile(gpkg.file)
+                                                        viewModel.setTileSource(gpkg)
+                                                    },
+                                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                                                ) {
+                                                    Text("Сделать активной", color = Color(0xFF81C784), fontSize = 10.sp)
+                                                }
+                                            }
+                                            TextButton(
+                                                onClick = {
+                                                    viewModel.deleteOfflineMapFiles(listOf(gpkg.file))
+                                                },
+                                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                                            ) {
+                                                Text("Удалить", color = Color(0xFFE57373), fontSize = 10.sp)
+                                            }
                                         }
                                     }
+                                }
+                            }
+                        }
+
+                        // Status indicator for active offline maps & imported MBTiles list
+                        Text(
+                            text = "ИМПОРТИРОВАННЫЕ СЛОИ MBTILES (${orderedMbtilesList.size})",
+                            color = Color(0xFF81C784),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+
+                        if (orderedMbtilesList.isEmpty()) {
+                            Surface(
+                                color = Color(0x11FFFFFF),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = "Нет импортированных карт MBTiles. Нажмите кнопку ниже для импорта.",
+                                    color = Color(0xFF90A4AE),
+                                    fontSize = 11.sp,
+                                    modifier = Modifier.padding(12.dp)
+                                )
+                            }
+                        } else {
+                            Text(
+                                text = "Отметьте 2+ карты для объединения в один файл. Кнопками ↑ / ↓ настройте порядок приоритета (карта снизу перекрывает верхние при наложении).",
+                                color = Color(0xFFB0BEC5),
+                                fontSize = 10.sp
+                            )
+
+                            orderedMbtilesList.forEachIndexed { index, mbtiles ->
+                                val isSelected = selectedMbtilesPaths.contains(mbtiles.file.absolutePath)
+                                val isActive = activeTileSource.id == mbtiles.id
+                                val isVec = mbtiles.metadata.isVector
+                                val typeLabel = if (isVec) "Вектор" else "Растр"
+                                val sizeMb = (mbtiles.file.length() / (1024.0 * 1024.0))
+
+                                Surface(
+                                    color = if (isSelected) Color(0x2200897B) else Color(0x15FFFFFF),
+                                    shape = RoundedCornerShape(8.dp),
+                                    border = BorderStroke(
+                                        1.dp,
+                                        if (isActive) Color(0xFF81C784) else if (isSelected) Color(0xFF00897B) else Color(0x33FFFFFF)
+                                    ),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(modifier = Modifier.padding(8.dp)) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Checkbox(
+                                                checked = isSelected,
+                                                onCheckedChange = { checked ->
+                                                    selectedMbtilesPaths = if (checked) {
+                                                        selectedMbtilesPaths + mbtiles.file.absolutePath
+                                                    } else {
+                                                        selectedMbtilesPaths - mbtiles.file.absolutePath
+                                                    }
+                                                },
+                                                modifier = Modifier.size(24.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    Text(
+                                                        text = mbtiles.name,
+                                                        color = Color.White,
+                                                        fontSize = 12.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        modifier = Modifier.weight(1f, fill = false)
+                                                    )
+                                                    if (isActive) {
+                                                        Spacer(modifier = Modifier.width(4.dp))
+                                                        Surface(
+                                                            color = Color(0xFF2E7D32),
+                                                            shape = RoundedCornerShape(4.dp)
+                                                        ) {
+                                                            Text(
+                                                                "АКТИВНА",
+                                                                color = Color.White,
+                                                                fontSize = 9.sp,
+                                                                fontWeight = FontWeight.Bold,
+                                                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                                Text(
+                                                    text = "Зум: ${mbtiles.minZoom}..${mbtiles.maxZoom} • $typeLabel • ${String.format(java.util.Locale.US, "%.1f МБ", sizeMb)}",
+                                                    color = Color(0xFF90A4AE),
+                                                    fontSize = 10.sp
+                                                )
+                                            }
+
+                                            // Reorder buttons for priority
+                                            IconButton(
+                                                onClick = {
+                                                    if (index > 0) {
+                                                        val mutable = orderedMbtilesList.toMutableList()
+                                                        val item = mutable.removeAt(index)
+                                                        mutable.add(index - 1, item)
+                                                        orderedMbtilesList = mutable
+                                                    }
+                                                },
+                                                enabled = index > 0,
+                                                modifier = Modifier.size(28.dp)
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.ArrowUpward,
+                                                    contentDescription = "Выше в списке",
+                                                    tint = if (index > 0) Color.White else Color(0x33FFFFFF),
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+
+                                            IconButton(
+                                                onClick = {
+                                                    if (index < orderedMbtilesList.size - 1) {
+                                                        val mutable = orderedMbtilesList.toMutableList()
+                                                        val item = mutable.removeAt(index)
+                                                        mutable.add(index + 1, item)
+                                                        orderedMbtilesList = mutable
+                                                    }
+                                                },
+                                                enabled = index < orderedMbtilesList.size - 1,
+                                                modifier = Modifier.size(28.dp)
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.ArrowDownward,
+                                                    contentDescription = "Ниже в списке (выше приоритет)",
+                                                    tint = if (index < orderedMbtilesList.size - 1) Color.White else Color(0x33FFFFFF),
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                        }
+
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.End,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            if (!isActive) {
+                                                TextButton(
+                                                    onClick = {
+                                                        viewModel.attachMbtilesFile(mbtiles.file)
+                                                        viewModel.setTileSource(mbtiles)
+                                                    },
+                                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                                                ) {
+                                                    Text("Сделать активной", color = Color(0xFF81C784), fontSize = 10.sp)
+                                                }
+                                            }
+                                            TextButton(
+                                                onClick = {
+                                                    viewModel.deleteOfflineMapFiles(listOf(mbtiles.file))
+                                                },
+                                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                                            ) {
+                                                Text("Удалить", color = Color(0xFFE57373), fontSize = 10.sp)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Selection & Merge section
+                            val selectedSources = orderedMbtilesList.filter { selectedMbtilesPaths.contains(it.file.absolutePath) }
+                            val hasVector = selectedSources.any { it.metadata.isVector }
+                            val hasRaster = selectedSources.any { !it.metadata.isVector }
+                            val isFormatCompatible = selectedSources.size >= 2 && !(hasVector && hasRaster)
+
+                            if (selectedSources.isNotEmpty()) {
+                                if (selectedSources.size < 2) {
+                                    Surface(
+                                        color = Color(0x22FFB74D),
+                                        shape = RoundedCornerShape(6.dp),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text(
+                                            text = "Выберите ещё как минимум одну карту для слияния (выбрано: 1)",
+                                            color = Color(0xFFFFB74D),
+                                            fontSize = 10.sp,
+                                            modifier = Modifier.padding(8.dp)
+                                        )
+                                    }
+                                } else if (hasVector && hasRaster) {
+                                    Surface(
+                                        color = Color(0x22E57373),
+                                        shape = RoundedCornerShape(6.dp),
+                                        border = BorderStroke(1.dp, Color(0xFFE57373)),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text(
+                                            text = "Нельзя слить растровую и векторную карты вместе. Выберите файлы только одного типа.",
+                                            color = Color(0xFFFF8A80),
+                                            fontSize = 11.sp,
+                                            modifier = Modifier.padding(8.dp)
+                                        )
+                                    }
+                                } else {
+                                    Surface(
+                                        color = Color(0x2200897B),
+                                        shape = RoundedCornerShape(6.dp),
+                                        border = BorderStroke(1.dp, Color(0xFF00897B)),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Column(modifier = Modifier.padding(8.dp)) {
+                                            Text(
+                                                text = "Готово к слиянию: ${selectedSources.size} карт (${if (hasVector) "Вектор" else "Растр"}).",
+                                                color = Color(0xFF80CBC4),
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                            Text(
+                                                text = "При совпадении тайлов карта снизу списка перекроет предыдущие.",
+                                                color = Color(0xFFB0BEC5),
+                                                fontSize = 10.sp
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Button(
+                                    onClick = {
+                                        showMergeConfirmDialog = true
+                                    },
+                                    enabled = isFormatCompatible && !isProcessing && !isBackupServiceRunning,
+                                    modifier = Modifier.fillMaxWidth().testTag("merge_maps_button"),
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00897B))
+                                ) {
+                                    Icon(Icons.Default.MergeType, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Объединить выбранные в один файл (${selectedSources.size})", fontWeight = FontWeight.Bold)
                                 }
                             }
                         }
@@ -804,6 +1164,145 @@ fun DataExchangeDialog(
             }
         }
     )
+
+    if (showMergeConfirmDialog) {
+        val selectedSources = orderedMbtilesList.filter { selectedMbtilesPaths.contains(it.file.absolutePath) }
+        AlertDialog(
+            onDismissRequest = { showMergeConfirmDialog = false },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.MergeType, contentDescription = null, tint = Color(0xFF81C784))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Объединение карт", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                }
+            },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = "Будет создана единая база MBTiles из выбранных источников (${selectedSources.size} шт.).",
+                        color = Color(0xFFCFD8DC),
+                        fontSize = 12.sp
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Порядок наложения (снизу перекрывает верх):",
+                        color = Color(0xFFFFB74D),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    selectedSources.forEachIndexed { i, src ->
+                        val isTopPriority = i == selectedSources.size - 1
+                        Text(
+                            text = "${i + 1}. ${src.name} ${if (isTopPriority) "★ (высший приоритет)" else ""}",
+                            color = if (isTopPriority) Color(0xFF81C784) else Color(0xFFB0BEC5),
+                            fontSize = 11.sp
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = mergeOutputFileName,
+                        onValueChange = { mergeOutputFileName = it },
+                        label = { Text("Имя нового файла (.mbtiles)", fontSize = 11.sp) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Checkbox(
+                            checked = deleteSourcesAfterMerge,
+                            onCheckedChange = { deleteSourcesAfterMerge = it }
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Удалить исходные файлы после объединения",
+                            color = Color(0xFFCFD8DC),
+                            fontSize = 11.sp
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val cleanBase = sanitizeFileName(mergeOutputFileName.trim(), "merged_map")
+                        val finalName = if (cleanBase.lowercase().endsWith(".mbtiles")) cleanBase else "$cleanBase.mbtiles"
+                        val mapsDir = File(context.filesDir, "maps").apply { mkdirs() }
+                        val targetFile = File(mapsDir, finalName)
+
+                        val sourceFiles = selectedSources.map { it.file }
+                        if (!deleteSourcesAfterMerge) {
+                            pendingSourcesToOfferDelete = sourceFiles
+                        } else {
+                            pendingSourcesToOfferDelete = null
+                        }
+
+                        MapBackupService.startMerge(
+                            context = context,
+                            sourceFiles = sourceFiles,
+                            outputFile = targetFile,
+                            deleteSourcesOnSuccess = deleteSourcesAfterMerge
+                        )
+                        showMergeConfirmDialog = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00897B))
+                ) {
+                    Text("Объединить", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showMergeConfirmDialog = false }) {
+                    Text("Отмена", color = Color(0xFF90A4AE))
+                }
+            }
+        )
+    }
+
+    if (showPostMergeDeleteDialog) {
+        val count = pendingSourcesToOfferDelete?.size ?: 0
+        AlertDialog(
+            onDismissRequest = {
+                pendingSourcesToOfferDelete = null
+                showPostMergeDeleteDialog = false
+            },
+            title = {
+                Text("Очистка исходных файлов", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            },
+            text = {
+                Text(
+                    text = "Слияние успешно завершено! Удалить исходные $count файлов карт, чтобы освободить место на устройстве?",
+                    color = Color(0xFFCFD8DC),
+                    fontSize = 13.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        pendingSourcesToOfferDelete?.let { files ->
+                            viewModel.deleteOfflineMapFiles(files)
+                        }
+                        pendingSourcesToOfferDelete = null
+                        showPostMergeDeleteDialog = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F))
+                ) {
+                    Text("Удалить исходные ($count)", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        pendingSourcesToOfferDelete = null
+                        showPostMergeDeleteDialog = false
+                    }
+                ) {
+                    Text("Оставить как есть", color = Color(0xFF90A4AE))
+                }
+            }
+        )
+    }
 }
 
 private fun getFileName(context: Context, uri: Uri): String {

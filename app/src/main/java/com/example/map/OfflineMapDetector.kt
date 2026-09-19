@@ -5,6 +5,7 @@ import java.io.InputStream
 
 enum class OfflineMapFormat(val title: String, val extension: String) {
     MBTILES("Карта MBTiles (SQLite)", ".mbtiles"),
+    GEOPACKAGE("Карта GeoPackage (.gpkg)", ".gpkg"),
     ORNTPACK("Офлайн-пакет .orntpack (ZIP)", ".orntpack"),
     UNKNOWN("Неизвестный формат", "")
 }
@@ -18,6 +19,9 @@ object OfflineMapDetector {
      */
     fun detect(fileName: String, headerBytes: ByteArray? = null): OfflineMapFormat {
         val lower = fileName.lowercase()
+        if (lower.endsWith(".gpkg")) {
+            return OfflineMapFormat.GEOPACKAGE
+        }
         if (lower.endsWith(".mbtiles")) {
             return OfflineMapFormat.MBTILES
         }
@@ -35,7 +39,10 @@ object OfflineMapDetector {
                         break
                     }
                 }
-                if (matchesSqlite) return OfflineMapFormat.MBTILES
+                if (matchesSqlite) {
+                    // Check if gpkg by name or default to mbtiles
+                    return if (lower.endsWith(".gpkg")) OfflineMapFormat.GEOPACKAGE else OfflineMapFormat.MBTILES
+                }
             }
 
             // ZIP / .orntpack header check (0x50, 0x4B, 0x03, 0x04)

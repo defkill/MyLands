@@ -1,0 +1,267 @@
+package com.example.map
+
+import android.database.sqlite.SQLiteDatabase
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Path
+import android.util.Log
+import android.util.LruCache
+import com.example.map.vector.DoublePoint
+import com.example.map.vector.GeoFeature
+import com.example.map.vector.GeoPackageGeometryParser
+import com.example.map.vector.GeoPackageIndexer
+import com.example.map.vector.GeoPackageStyle
+import com.example.model.GeoPoint
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import java.io.Closeable
+import java.io.File
+import kotlin.math.PI
+import kotlin.math.atan
+import kotlin.math.ln
+import kotlin.math.min
+import kotlin.math.sinh
+import kotlin.math.tan
+
+/**
+ * High-performance, memory-safe TileSource for OGC GeoPackage (.gpkg) vector feature datasets.
+ *
+ * Utilizes sidecar spatial index (`.spatialindex`) to render OSM vector features into 512x512
+ * RGB_565 Bitmaps on-the-fly.
+ */
+class GeoPackageTileSource(
+    val file: File,
+    val indexFile: File,
+    val bounds: GeoBoundingBox? = null
+) : TileSource(
+    id = "gpkg_${file.nameWithoutExtension.lowercase().replace("[^a-z0-9_]".toRegex(), "_")}",
+    name = file.nameWithoutExtension,
+    type = MapTileType.GEOPACKAGE,
+    urlTemplate = "",
+    maxZoom = 20,
+    minZoom = 1
+), Closeable {
+
+    private var sourceDb: SQLiteDatabase? = null
+    private var indexDb: SQLiteDatabase? = null
+    private val tileSize = 512f
+
+    data class GeoBoundingBox(val minLon: Double, val minLat: Double, val maxLon: Double, val maxLat: Double)
+
+    // Memory-bounded feature cache (capacity 8MB)
+    private val featureCache = object : LruCache<String, GeoFeature>((Runtime.getRuntime().maxMemory() / 32).toInt().coerceAtLeast(2 * 1024 * 1024)) {
+        override fun sizeOf(key: String, value: GeoFeature): Int {
+            var pts = 0
+            for (r in value.rings) pts += r.size
+            return (pts * 16 + 64 + value.attributes.size * 32).coerceAtLeast(64)
+        }
+    }
+
+    init {
+        try {
+            sourceDb = SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
+            if (indexFile.exists()) {
+                indexDb = SQLiteDatabase.openDatabase(indexFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed opening GeoPackage / Index: ${e.message}", e)
+        }
+    }
+
+    fun isIndexReady(): Boolean = indexDb != null && indexDb?.isOpen == true
+
+    /**
+     * Renders a 512x512 RGB_565 bitmap tile for given zoom, x, y coordinates.
+     */
+    fun getTileBitmap(zoom: Int, x: Int, y: Int): Bitmap? {
+        val sDb = sourceDb ?: return null
+        val iDb = indexDb ?: return null
+        if (!sDb.isOpen || !iDb.isOpen) return null
+
+        val tileBounds = getTileGeoBounds(zoom, x, y)
+
+        val bitmap = try {
+            Bitmap.createBitmap(512, 512, Bitmap.Config.RGB_565)
+        } catch (_: OutOfMemoryError) {
+            return null
+        } catch (_: Throwable) {
+            return null
+        }
+
+        val canvas = Canvas(bitmap)
+        canvas.drawColor(GeoPackageStyle.COLOR_BACKGROUND)
+
+        try {
+            for (layerName in GeoPackageStyle.RENDER_LAYER_ORDER) {
+                renderLayer(canvas, sDb, iDb, layerName, tileBounds, zoom)
+            }
+            return bitmap
+        } catch (e: Throwable) {
+            Log.w(TAG, "Tile rendering interrupted ($zoom/$x/$y): ${e.message}")
+            return bitmap
+        }
+    }
+
+    private fun renderLayer(
+        canvas: Canvas,
+        sDb: SQLiteDatabase,
+        iDb: SQLiteDatabase,
+        layerName: String,
+        bounds: GeoBoundingBox,
+        zoom: Int
+    ) {
+        val fids = GeoPackageIndexer.querySpatialIndex(
+            iDb,
+            layerName,
+            bounds.minLon,
+            bounds.maxLon,
+            bounds.minLat,
+            bounds.maxLat
+        )
+        if (fids.isEmpty()) return
+
+        // Batch query feature data
+        val features = mutableListOf<GeoFeature>()
+        for (fid in fids) {
+            val cacheKey = "$layerName:$fid"
+            val cached = featureCache.get(cacheKey)
+            if (cached != null) {
+                if (GeoPackageStyle.isFeatureVisibleAtZoom(layerName, cached.attributes, zoom)) {
+                    features.add(cached)
+                }
+                continue
+            }
+
+            try {
+                sDb.rawQuery("SELECT geom, fclass, name FROM \"$layerName\" WHERE rowid = ?", arrayOf(fid.toString())).use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val geomBytes = cursor.getBlob(0)
+                        val fclass = cursor.getString(1) ?: ""
+                        val name = cursor.getString(2) ?: ""
+                        val attrs = mapOf("fclass" to fclass, "name" to name)
+
+                        if (geomBytes != null) {
+                            val parsed = GeoPackageGeometryParser.parse(fid, geomBytes, attrs)
+                            if (parsed != null) {
+                                featureCache.put(cacheKey, parsed)
+                                if (GeoPackageStyle.isFeatureVisibleAtZoom(layerName, attrs, zoom)) {
+                                    features.add(parsed)
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (_: Throwable) {}
+        }
+
+        if (features.isEmpty()) return
+
+        // Draw Polygons
+        if (layerName.endsWith("_a_free")) {
+            for (f in features) {
+                if (f.geometryType == "POLYGON" || f.geometryType == "MULTIPOLYGON") {
+                    val fclass = (f.attributes["fclass"] as? String) ?: ""
+                    val paint = GeoPackageStyle.getPolygonPaint(layerName, fclass)
+                    val path = Path()
+                    for (ring in f.rings) {
+                        if (ring.isEmpty()) continue
+                        var first = true
+                        for (pt in ring) {
+                            val px = lonToPixel(pt.lon, bounds.minLon, bounds.maxLon)
+                            val py = latToPixel(pt.lat, bounds.minLat, bounds.maxLat)
+                            if (first) {
+                                path.moveTo(px, py)
+                                first = false
+                            } else {
+                                path.lineTo(px, py)
+                            }
+                        }
+                        path.close()
+                    }
+                    canvas.drawPath(path, paint)
+                }
+            }
+        }
+
+        // Draw Lines (Casing first if road, then main stroke)
+        if (layerName == "gis_osm_roads_free") {
+            for (f in features) {
+                if (f.geometryType == "LINESTRING" || f.geometryType == "MULTILINESTRING") {
+                    val fclass = (f.attributes["fclass"] as? String) ?: ""
+                    val casingPaint = GeoPackageStyle.getLinePaint(layerName, fclass, zoom, isCasing = true)
+                    drawLines(canvas, f, bounds, casingPaint)
+                }
+            }
+        }
+
+        for (f in features) {
+            if (f.geometryType == "LINESTRING" || f.geometryType == "MULTILINESTRING") {
+                val fclass = (f.attributes["fclass"] as? String) ?: ""
+                val paint = GeoPackageStyle.getLinePaint(layerName, fclass, zoom, isCasing = false)
+                drawLines(canvas, f, bounds, paint)
+            }
+        }
+    }
+
+    private fun drawLines(canvas: Canvas, feature: GeoFeature, bounds: GeoBoundingBox, paint: android.graphics.Paint) {
+        val path = Path()
+        for (line in feature.rings) {
+            if (line.size < 2) continue
+            var first = true
+            for (pt in line) {
+                val px = lonToPixel(pt.lon, bounds.minLon, bounds.maxLon)
+                val py = latToPixel(pt.lat, bounds.minLat, bounds.maxLat)
+                if (first) {
+                    path.moveTo(px, py)
+                    first = false
+                } else {
+                    path.lineTo(px, py)
+                }
+            }
+        }
+        canvas.drawPath(path, paint)
+    }
+
+    private fun lonToPixel(lon: Double, minLon: Double, maxLon: Double): Float {
+        val span = maxLon - minLon
+        if (span <= 0) return 0f
+        return ((lon - minLon) / span * tileSize).toFloat()
+    }
+
+    private fun latToPixel(lat: Double, minLat: Double, maxLat: Double): Float {
+        val mercY = ln(tan(Math.toRadians(lat) / 2.0 + PI / 4.0))
+        val mercMinY = ln(tan(Math.toRadians(minLat) / 2.0 + PI / 4.0))
+        val mercMaxY = ln(tan(Math.toRadians(maxLat) / 2.0 + PI / 4.0))
+        val span = mercMaxY - mercMinY
+        if (span <= 0) return 0f
+        return (tileSize - ((mercY - mercMinY) / span * tileSize)).toFloat()
+    }
+
+    private fun getTileGeoBounds(zoom: Int, x: Int, y: Int): GeoBoundingBox {
+        val n = 1 shl zoom
+        val minLon = x.toDouble() / n * 360.0 - 180.0
+        val maxLon = (x + 1).toDouble() / n * 360.0 - 180.0
+        val maxLat = Math.toDegrees(atan(sinh(PI * (1.0 - 2.0 * y.toDouble() / n))))
+        val minLat = Math.toDegrees(atan(sinh(PI * (1.0 - 2.0 * (y + 1).toDouble() / n))))
+        return GeoBoundingBox(minLon = minLon, minLat = minLat, maxLon = maxLon, maxLat = maxLat)
+    }
+
+    override fun close() {
+        try { sourceDb?.close() } catch (_: Exception) {}
+        try { indexDb?.close() } catch (_: Exception) {}
+        sourceDb = null
+        indexDb = null
+        featureCache.evictAll()
+    }
+
+    companion object {
+        private const val TAG = "GeoPackageTileSource"
+
+        fun create(file: File): GeoPackageTileSource? {
+            if (!file.exists() || file.length() < 1024) return null
+            val indexFile = File(file.parentFile, "${file.nameWithoutExtension}.spatialindex")
+            return GeoPackageTileSource(file, indexFile)
+        }
+    }
+}

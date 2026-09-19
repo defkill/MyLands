@@ -17,6 +17,8 @@ import androidx.annotation.RequiresApi
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.example.MainActivity
+import com.example.map.MbtilesMerger
+import com.example.map.MergeResult
 import com.example.map.TileManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -39,6 +41,7 @@ class MapBackupService : Service() {
     sealed class OperationType {
         object Backup : OperationType()
         object Restore : OperationType()
+        object Merge : OperationType()
     }
 
     data class Progress(
@@ -64,10 +67,13 @@ class MapBackupService : Service() {
 
         const val ACTION_BACKUP = "com.example.action.BACKUP_MAPS"
         const val ACTION_RESTORE = "com.example.action.RESTORE_MAPS"
+        const val ACTION_MERGE_MAPS = "com.example.action.MERGE_MAPS"
         const val ACTION_CANCEL = "com.example.action.CANCEL_BACKUP_MAPS"
 
         const val EXTRA_OUTPUT_PATH = "com.example.extra.OUTPUT_PATH"
         const val EXTRA_RESTORE_URI = "com.example.extra.RESTORE_URI"
+        const val EXTRA_SOURCE_PATHS = "com.example.extra.SOURCE_PATHS"
+        const val EXTRA_DELETE_SOURCES = "com.example.extra.DELETE_SOURCES"
 
         private val _isRunning = MutableStateFlow(false)
         val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
@@ -98,6 +104,27 @@ class MapBackupService : Service() {
             val intent = Intent(context, MapBackupService::class.java).apply {
                 action = ACTION_RESTORE
                 putExtra(EXTRA_RESTORE_URI, archiveUri.toString())
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        }
+
+        fun startMerge(
+            context: Context,
+            sourceFiles: List<File>,
+            outputFile: File,
+            deleteSourcesOnSuccess: Boolean = false
+        ) {
+            _lastResult.value = null
+
+            val intent = Intent(context, MapBackupService::class.java).apply {
+                action = ACTION_MERGE_MAPS
+                putStringArrayListExtra(EXTRA_SOURCE_PATHS, ArrayList(sourceFiles.map { it.absolutePath }))
+                putExtra(EXTRA_OUTPUT_PATH, outputFile.absolutePath)
+                putExtra(EXTRA_DELETE_SOURCES, deleteSourcesOnSuccess)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)
@@ -155,8 +182,100 @@ class MapBackupService : Service() {
                 }
                 startRestoreOperation(Uri.parse(uriStr))
             }
+            ACTION_MERGE_MAPS -> {
+                val paths = intent.getStringArrayListExtra(EXTRA_SOURCE_PATHS)
+                val outputPath = intent.getStringExtra(EXTRA_OUTPUT_PATH)
+                val deleteSources = intent.getBooleanExtra(EXTRA_DELETE_SOURCES, false)
+                if (paths.isNullOrEmpty() || outputPath == null) {
+                    Log.e(TAG, "Missing arguments for ACTION_MERGE_MAPS")
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+                val sourceFiles = paths.map { File(it) }
+                startMergeOperation(sourceFiles, File(outputPath), deleteSources)
+            }
         }
         return START_NOT_STICKY
+    }
+
+    private fun startMergeOperation(
+        sourceFiles: List<File>,
+        outputFile: File,
+        deleteSourcesOnSuccess: Boolean
+    ) {
+        cancelRequested = false
+        _isRunning.value = true
+        _lastResult.value = null
+
+        val notification = buildNotification("Слияние баз данных карт…", 0f)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ServiceCompat.startForeground(
+                this,
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+        acquireWakeLock()
+
+        serviceScope.launch {
+            try {
+                val totalCount = sourceFiles.size
+                val mergeResult = MbtilesMerger.merge(sourceFiles, outputFile) { current, total ->
+                    if (cancelRequested) throw java.util.concurrent.CancellationException("Отменено пользователем")
+                    val p = if (total > 0) (current.toFloat() / total).coerceIn(0f, 1f) else 0f
+                    val text = "Слияние: $current из $total файлов (${(p * 100).toInt()}%)"
+                    _progress.value = Progress(OperationType.Merge, current.toLong(), total.toLong(), p, text)
+                    updateNotification("Слияние карт", text, p)
+                }
+
+                when (mergeResult) {
+                    is MergeResult.Success -> {
+                        if (deleteSourcesOnSuccess) {
+                            sourceFiles.forEach { src ->
+                                if (src.absolutePath != outputFile.absolutePath) {
+                                    runCatching { src.delete() }
+                                }
+                            }
+                        }
+                        _lastResult.value = Result(
+                            OperationType.Merge,
+                            success = true,
+                            count = mergeResult.tileSourceCount,
+                            outputFile = mergeResult.file
+                        )
+                        notifyFinished("Карты объединены", "Объединено источников: ${mergeResult.tileSourceCount}")
+                    }
+                    is MergeResult.Error -> {
+                        _lastResult.value = Result(
+                            OperationType.Merge,
+                            success = false,
+                            count = 0,
+                            outputFile = null,
+                            error = mergeResult.message
+                        )
+                        notifyFinished("Ошибка слияния карт", mergeResult.message)
+                    }
+                }
+            } catch (e: java.util.concurrent.CancellationException) {
+                Log.i(TAG, "Merge cancelled by user")
+                runCatching { outputFile.delete() }
+                _lastResult.value = Result(OperationType.Merge, false, 0, null, "Отменено")
+            } catch (e: Exception) {
+                Log.e(TAG, "Merge failed", e)
+                runCatching { outputFile.delete() }
+                _lastResult.value = Result(OperationType.Merge, false, 0, null, e.localizedMessage ?: e.message)
+                notifyFinished("Ошибка слияния карт", e.localizedMessage ?: "Сбой слияния")
+            } finally {
+                _progress.value = null
+                _isRunning.value = false
+                releaseWakeLock()
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            }
+        }
     }
 
     private fun startBackupOperation(outputFile: File) {

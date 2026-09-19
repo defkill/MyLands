@@ -22,6 +22,7 @@ import com.example.data.track.TrackFilter
 import com.example.geodesy.GeodesyEngine
 import com.example.map.MapProjection
 import com.example.map.MbtilesTileSource
+import com.example.map.GeoPackageTileSource
 import com.example.map.OfflineMapDetector
 import com.example.map.OfflineMapFormat
 import com.example.map.RegionBounds
@@ -538,30 +539,89 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return source
     }
 
+    fun attachGpkgFile(file: File): GeoPackageTileSource? {
+        val source = tileManager.attachGpkg(file)
+        if (source != null) {
+            val current = _availableTileSources.value.toMutableList()
+            current.removeAll { it.id == source.id }
+            current.add(source)
+            _availableTileSources.value = current
+            _activeTileSource.value = source
+        }
+        return source
+    }
+
+    fun getSavedMbtilesList(): List<File> {
+        val mapsDir = File(getApplication<Application>().filesDir, "maps")
+        if (mapsDir.exists() && mapsDir.isDirectory) {
+            return mapsDir.listFiles { f -> f.isFile && (f.name.lowercase().endsWith(".mbtiles") || f.name.lowercase().endsWith(".gpkg")) }?.toList() ?: emptyList()
+        }
+        return emptyList()
+    }
+
+    fun deleteOfflineMapFiles(files: List<File>) {
+        files.forEach { file ->
+            if (_activeMbtiles.value?.file?.absolutePath == file.absolutePath) {
+                _activeMbtiles.value = null
+                if (_activeTileSource.value is MbtilesTileSource && (_activeTileSource.value as MbtilesTileSource).file.absolutePath == file.absolutePath) {
+                    _activeTileSource.value = TileSource.TOPO
+                }
+            }
+            if (_activeTileSource.value is GeoPackageTileSource && (_activeTileSource.value as GeoPackageTileSource).file.absolutePath == file.absolutePath) {
+                _activeTileSource.value = TileSource.TOPO
+            }
+            runCatching {
+                file.delete()
+                val indexFile = File(file.parentFile, "${file.nameWithoutExtension}.spatialindex")
+                if (indexFile.exists()) indexFile.delete()
+            }
+        }
+        restoreSavedOfflineMaps()
+    }
+
     fun restoreSavedOfflineMaps() {
         try {
             val mapsDir = File(getApplication<Application>().filesDir, "maps")
+            val newSources = mutableListOf<TileSource>()
             if (mapsDir.exists() && mapsDir.isDirectory) {
-                val mbtilesFiles = mapsDir.listFiles { f -> f.isFile && f.name.lowercase().endsWith(".mbtiles") }
-                if (!mbtilesFiles.isNullOrEmpty()) {
-                    val newSources = mutableListOf<TileSource>()
-                    for (file in mbtilesFiles) {
-                        val src = MbtilesTileSource.create(file)
-                        if (src != null) {
-                            newSources.add(src)
+                val mapFiles = mapsDir.listFiles { f -> f.isFile && (f.name.lowercase().endsWith(".mbtiles") || f.name.lowercase().endsWith(".gpkg")) }
+                if (!mapFiles.isNullOrEmpty()) {
+                    for (file in mapFiles) {
+                        if (file.name.lowercase().endsWith(".mbtiles")) {
+                            val src = MbtilesTileSource.create(file)
+                            if (src != null) {
+                                newSources.add(src)
+                            }
+                        } else if (file.name.lowercase().endsWith(".gpkg")) {
+                            val src = GeoPackageTileSource.create(file)
+                            if (src != null) {
+                                newSources.add(src)
+                            }
                         }
                     }
-                    if (newSources.isNotEmpty()) {
-                        val current = _availableTileSources.value.toMutableList()
-                        current.removeAll { curr -> newSources.any { it.id == curr.id } }
-                        current.addAll(newSources)
-                        _availableTileSources.value = current
+                }
+            }
+            val baseOnlineSources = _availableTileSources.value.filter { it !is MbtilesTileSource && it !is GeoPackageTileSource }
+            val updatedSources = (baseOnlineSources + newSources).distinctBy { it.id }
+            _availableTileSources.value = updatedSources
 
-                        val firstSource = newSources.first() as MbtilesTileSource
+            if (newSources.isNotEmpty()) {
+                val currentActive = _activeTileSource.value
+                val stillValid = updatedSources.any { it.id == currentActive.id }
+                if (!stillValid || (currentActive !is MbtilesTileSource && currentActive !is GeoPackageTileSource)) {
+                    val firstSource = newSources.first()
+                    if (firstSource is MbtilesTileSource) {
                         tileManager.attachMbtiles(firstSource.file)
                         _activeMbtiles.value = firstSource
-                        _activeTileSource.value = firstSource
+                    } else if (firstSource is GeoPackageTileSource) {
+                        tileManager.attachGpkg(firstSource.file)
                     }
+                    _activeTileSource.value = firstSource
+                }
+            } else {
+                if (_activeTileSource.value is MbtilesTileSource || _activeTileSource.value is GeoPackageTileSource) {
+                    _activeMbtiles.value = null
+                    _activeTileSource.value = TileSource.TOPO
                 }
             }
         } catch (e: Exception) {
@@ -907,6 +967,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             OfflineMapFormat.MBTILES -> {
                 val source = attachMbtilesFile(file)
                 Pair(OfflineMapFormat.MBTILES, source != null)
+            }
+            OfflineMapFormat.GEOPACKAGE -> {
+                val source = attachGpkgFile(file)
+                Pair(OfflineMapFormat.GEOPACKAGE, source != null)
             }
             OfflineMapFormat.ORNTPACK -> {
                 val ok = attachOfflineArchive(file)

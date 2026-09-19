@@ -15,7 +15,8 @@ enum class MapTileType(val title: String) {
     OSM_STANDARD("Карта (OpenStreetMap)"),
     SATELLITE("Спутник (Esri World Imagery)"),
     TOPO("Рельеф (OpenTopoMap)"),
-    MBTILES("Офлайн-карта MBTiles")
+    MBTILES("Офлайн-карта MBTiles"),
+    GEOPACKAGE("Офлайн-карта GeoPackage (.gpkg)")
 }
 
 open class TileSource(

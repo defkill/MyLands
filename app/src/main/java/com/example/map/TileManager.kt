@@ -63,6 +63,7 @@ class TileManager(private val context: Context) {
 
     private var offlineZipFile: ZipFile? = null
     private var activeMbtilesSource: MbtilesTileSource? = null
+    private var activeGpkgSource: GeoPackageTileSource? = null
 
     val availableOnlineSources: List<TileSource> = TileSource.ALL
 
@@ -186,7 +187,23 @@ class TileManager(private val context: Context) {
         }
     }
 
+    /**
+     * Attaches an offline .gpkg GeoPackage file (with spatial index).
+     */
+    fun attachGpkg(file: File): GeoPackageTileSource? {
+        return try {
+            val source = GeoPackageTileSource.create(file) ?: return null
+            activeGpkgSource?.close()
+            activeGpkgSource = source
+            clearMemoryCache()
+            source
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     fun getActiveMbtilesSource(): MbtilesTileSource? = activeMbtilesSource
+    fun getActiveGpkgSource(): GeoPackageTileSource? = activeGpkgSource
 
     fun hasOfflinePackage(): Boolean = offlineZipFile != null
 
@@ -197,7 +214,7 @@ class TileManager(private val context: Context) {
 
     /**
      * Loads tile bitmap asynchronously:
-     * Memory -> MBTiles (direct SQLite) -> Offline Package (.orntpack) -> Disk Cache -> Network.
+     * Memory -> MBTiles (direct SQLite) -> GeoPackage (spatial index) -> Offline Package (.orntpack) -> Disk Cache -> Network.
      */
     suspend fun getTileBitmap(source: TileSource, tile: TileCoordinate): Bitmap? {
         val cacheKey = "${source.id}/${tile.key}"
@@ -206,7 +223,8 @@ class TileManager(private val context: Context) {
         memoryCache.get(cacheKey)?.let { return it }
 
         val isVector = (source as? MbtilesTileSource)?.metadata?.isVector == true ||
-            (source.id == activeMbtilesSource?.id && activeMbtilesSource?.metadata?.isVector == true)
+            (source.id == activeMbtilesSource?.id && activeMbtilesSource?.metadata?.isVector == true) ||
+            source is GeoPackageTileSource || (source.id == activeGpkgSource?.id)
 
         val dispatcher = if (isVector) vectorParseDispatcher else Dispatchers.IO
 
@@ -231,6 +249,25 @@ class TileManager(private val context: Context) {
                 return@withContext null
             } else if (source.type == MapTileType.MBTILES) {
                 // Source is MBTILES but no matching instance found
+                return@withContext null
+            }
+
+            // 2b. Direct GeoPackage Source
+            if (source is GeoPackageTileSource) {
+                val bmp = source.getTileBitmap(tile.zoom, tile.x, tile.y)
+                if (bmp != null) {
+                    memoryCache.put(cacheKey, bmp)
+                    return@withContext bmp
+                }
+                return@withContext null
+            } else if (activeGpkgSource != null && source.id == activeGpkgSource?.id) {
+                val bmp = activeGpkgSource?.getTileBitmap(tile.zoom, tile.x, tile.y)
+                if (bmp != null) {
+                    memoryCache.put(cacheKey, bmp)
+                    return@withContext bmp
+                }
+                return@withContext null
+            } else if (source.type == MapTileType.GEOPACKAGE) {
                 return@withContext null
             }
 
