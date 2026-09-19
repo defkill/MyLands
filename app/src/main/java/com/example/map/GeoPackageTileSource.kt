@@ -47,6 +47,9 @@ class GeoPackageTileSource(
     private var indexDb: SQLiteDatabase? = null
     private val tileSize = 512f
 
+    var isIndexOutdated: Boolean = false
+        private set
+
     data class GeoBoundingBox(val minLon: Double, val minLat: Double, val maxLon: Double, val maxLat: Double)
 
     // Memory-bounded feature cache (capacity 8MB)
@@ -62,14 +65,25 @@ class GeoPackageTileSource(
         try {
             sourceDb = SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
             if (indexFile.exists()) {
-                indexDb = SQLiteDatabase.openDatabase(indexFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
+                val candidate = SQLiteDatabase.openDatabase(indexFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
+                if (GeoPackageIndexer.isIndexCompatible(candidate)) {
+                    indexDb = candidate
+                    isIndexOutdated = false
+                } else {
+                    candidate.close()
+                    indexDb = null
+                    isIndexOutdated = true
+                    Log.w(TAG, "Индекс ${indexFile.name} устарел (несовместимая схема v${GeoPackageIndexer.CURRENT_INDEX_SCHEMA_VERSION}) — требуется пересборка")
+                }
+            } else {
+                isIndexOutdated = true
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed opening GeoPackage / Index: ${e.message}", e)
         }
     }
 
-    fun isIndexReady(): Boolean = indexDb != null && indexDb?.isOpen == true
+    fun isIndexReady(): Boolean = indexDb != null && indexDb?.isOpen == true && !isIndexOutdated
 
     val isBtreeFallback: Boolean
         get() {

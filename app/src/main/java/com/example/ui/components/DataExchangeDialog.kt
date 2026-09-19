@@ -26,7 +26,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
+import com.example.map.GeoPackageTileSource
 import com.example.map.OfflineMapFormat
+import com.example.map.vector.GeoPackageIndexer
 import com.example.service.MapBackupService
 import com.example.util.SafeZipExtraction
 import com.example.viewmodel.MainViewModel
@@ -566,6 +568,9 @@ fun DataExchangeDialog(
                                 val isVec = mbtiles.metadata.isVector
                                 val typeLabel = if (isVec) "Вектор" else "Растр"
                                 val sizeMb = (mbtiles.file.length() / (1024.0 * 1024.0))
+                                val isGpkgOutdated = (mbtiles as? GeoPackageTileSource)?.isIndexOutdated == true ||
+                                    (mbtiles.file.name.lowercase().endsWith(".gpkg") &&
+                                        !GeoPackageIndexer.isIndexFileCompatible(File(mbtiles.file.parentFile, "${mbtiles.file.nameWithoutExtension}.spatialindex")))
 
                                 Surface(
                                     color = if (isSelected) Color(0x2200897B) else Color(0x15FFFFFF),
@@ -618,6 +623,23 @@ fun DataExchangeDialog(
                                                         }
                                                     }
                                                 }
+
+                                                if (isGpkgOutdated) {
+                                                    Spacer(modifier = Modifier.height(2.dp))
+                                                    Surface(
+                                                        color = Color(0x33FFB74D),
+                                                        shape = RoundedCornerShape(4.dp)
+                                                    ) {
+                                                        Text(
+                                                            "⚠ Требуется переиндексация",
+                                                            color = Color(0xFFFFB74D),
+                                                            fontSize = 9.sp,
+                                                            fontWeight = FontWeight.Bold,
+                                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                        )
+                                                    }
+                                                }
+
                                                 Text(
                                                     text = "Зум: ${mbtiles.minZoom}..${mbtiles.maxZoom} • $typeLabel • ${String.format(java.util.Locale.US, "%.1f МБ", sizeMb)}",
                                                     color = Color(0xFF90A4AE),
@@ -672,6 +694,19 @@ fun DataExchangeDialog(
                                             horizontalArrangement = Arrangement.End,
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
+                                            if (isGpkgOutdated) {
+                                                TextButton(
+                                                    onClick = {
+                                                        MapBackupService.startReindex(context, mbtiles.file)
+                                                    },
+                                                    enabled = !isBackupServiceRunning,
+                                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                                                ) {
+                                                    Icon(Icons.Default.Refresh, contentDescription = null, tint = Color(0xFFFFB74D), modifier = Modifier.size(13.dp))
+                                                    Spacer(modifier = Modifier.width(3.dp))
+                                                    Text("Пересобрать индекс", color = Color(0xFFFFB74D), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                                }
+                                            }
                                             if (!isActive) {
                                                 TextButton(
                                                     onClick = {

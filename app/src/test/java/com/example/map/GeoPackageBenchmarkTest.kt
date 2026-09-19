@@ -211,4 +211,30 @@ class GeoPackageBenchmarkTest {
         assertTrue("Tile rendering should be reasonably fast with spatial index", avgRenderMs < 2500.0)
         tileSource.close()
     }
+
+    @Test
+    fun testOutdatedIndex_DetectedAndMarkedNotReady() = runBlocking {
+        val gpkgFile = File(testDir, "outdated_test.gpkg")
+        val db = SQLiteDatabase.openOrCreateDatabase(gpkgFile, null)
+        db.execSQL("CREATE TABLE gpkg_contents (table_name TEXT, data_type TEXT)")
+        db.execSQL("INSERT INTO gpkg_contents VALUES ('test_layer', 'features')")
+        db.execSQL("CREATE TABLE test_layer (id INTEGER PRIMARY KEY, geom BLOB)")
+        db.close()
+
+        // Create an old spatialindex (schema version 1 or without version)
+        val indexFile = File(testDir, "outdated_test.spatialindex")
+        val indexDb = SQLiteDatabase.openOrCreateDatabase(indexFile, null)
+        indexDb.execSQL("CREATE TABLE index_metadata (key TEXT PRIMARY KEY, value TEXT)")
+        indexDb.execSQL("INSERT INTO index_metadata (key, value) VALUES ('version', '1')")
+        indexDb.close()
+
+        // Index compatibility check should return false
+        assertFalse(GeoPackageIndexer.isIndexFileCompatible(indexFile))
+
+        // Opening via GeoPackageTileSource should detect outdated index and not be ready
+        val tileSource = GeoPackageTileSource.create(gpkgFile)!!
+        assertTrue(tileSource.isIndexOutdated)
+        assertFalse(tileSource.isIndexReady())
+        tileSource.close()
+    }
 }

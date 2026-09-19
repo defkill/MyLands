@@ -75,6 +75,7 @@ class MapBackupService : Service() {
         const val ACTION_RESTORE = "com.example.action.RESTORE_MAPS"
         const val ACTION_MERGE_MAPS = "com.example.action.MERGE_MAPS"
         const val ACTION_IMPORT_MAP = "com.example.action.IMPORT_MAP"
+        const val ACTION_REINDEX_GPKG = "com.example.action.REINDEX_GPKG"
         const val ACTION_CANCEL = "com.example.action.CANCEL_BACKUP_MAPS"
 
         const val EXTRA_OUTPUT_PATH = "com.example.extra.OUTPUT_PATH"
@@ -83,6 +84,7 @@ class MapBackupService : Service() {
         const val EXTRA_DELETE_SOURCES = "com.example.extra.DELETE_SOURCES"
         const val EXTRA_SOURCE_URI = "com.example.extra.SOURCE_URI"
         const val EXTRA_RAW_FILE_NAME = "com.example.extra.RAW_FILE_NAME"
+        const val EXTRA_GPKG_PATH = "com.example.extra.GPKG_PATH"
 
         private val _isRunning = MutableStateFlow(false)
         val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
@@ -92,6 +94,20 @@ class MapBackupService : Service() {
 
         private val _lastResult = MutableStateFlow<Result?>(null)
         val lastResult: StateFlow<Result?> = _lastResult.asStateFlow()
+
+        fun startReindex(context: Context, gpkgFile: File) {
+            _lastResult.value = null
+
+            val intent = Intent(context, MapBackupService::class.java).apply {
+                action = ACTION_REINDEX_GPKG
+                putExtra(EXTRA_GPKG_PATH, gpkgFile.absolutePath)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        }
 
         fun startImport(context: Context, sourceUri: Uri, rawFileName: String) {
             _lastResult.value = null
@@ -228,8 +244,71 @@ class MapBackupService : Service() {
                 }
                 startImportOperation(Uri.parse(uriStr), rawFileName)
             }
+            ACTION_REINDEX_GPKG -> {
+                val path = intent.getStringExtra(EXTRA_GPKG_PATH)
+                if (path == null) {
+                    Log.e(TAG, "Missing arguments for ACTION_REINDEX_GPKG")
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+                startReindexOperation(File(path))
+            }
         }
         return START_NOT_STICKY
+    }
+
+    private fun startReindexOperation(targetFile: File) {
+        cancelRequested = false
+        _isRunning.value = true
+        _lastResult.value = null
+
+        val notification = buildNotification("Переиндексация карты…", 0f)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ServiceCompat.startForeground(
+                this,
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+        acquireWakeLock()
+
+        serviceScope.launch {
+            try {
+                _progress.value = Progress(OperationType.Import, 0, 100, 0f, "Построение пространственного индекса (R-Tree)...")
+                updateNotification("Индексация GeoPackage", "Построение индекса R-Tree...", 0f)
+
+                GeoPackageIndexer.buildSpatialIndex(targetFile) { layerName, done, total ->
+                    if (cancelRequested) throw java.util.concurrent.CancellationException("Отменено пользователем")
+                    val p = if (total > 0) (done.toFloat() / total).coerceIn(0f, 1f) else 0f
+                    val text = "Индексация: $layerName ($done/$total)"
+                    _progress.value = Progress(OperationType.Import, done.toLong(), total.toLong(), p, text)
+                    updateNotification("Индексация карты", text, p)
+                }
+
+                _lastResult.value = Result(
+                    OperationType.Import,
+                    success = true,
+                    count = 1,
+                    outputFile = targetFile
+                )
+                notifyFinished("Индекс готов", "Переиндексация '${targetFile.name}' завершена")
+            } catch (e: java.util.concurrent.CancellationException) {
+                Log.i(TAG, "Reindexing cancelled by user")
+                _lastResult.value = Result(OperationType.Import, false, 0, null, "Отменено")
+            } catch (e: Exception) {
+                Log.e(TAG, "Reindexing failed", e)
+                _lastResult.value = Result(OperationType.Import, false, 0, null, e.localizedMessage ?: e.message)
+                notifyFinished("Ошибка переиндексации", e.localizedMessage ?: "Сбой построения индекса")
+            } finally {
+                _progress.value = null
+                _isRunning.value = false
+                releaseWakeLock()
+                stopForeground(STOP_FOREGROUND_REMOVE)
+            }
+        }
     }
 
     private fun startImportOperation(sourceUri: Uri, rawFileName: String) {

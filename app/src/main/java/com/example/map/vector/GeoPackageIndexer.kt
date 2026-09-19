@@ -25,6 +25,35 @@ object GeoPackageIndexer {
 
     private const val TAG = "GeoPackageIndexer"
     private const val BATCH_SIZE = 1000
+    const val CURRENT_INDEX_SCHEMA_VERSION = 3
+
+    /**
+     * Checks if the SQLite spatial index has the expected schema version (v3 with segments table).
+     */
+    fun isIndexCompatible(indexDb: SQLiteDatabase): Boolean {
+        return try {
+            if (!indexDb.isOpen) return false
+            indexDb.rawQuery("SELECT value FROM index_metadata WHERE key = 'version'", null).use { cursor ->
+                cursor.moveToFirst() && cursor.getString(0)?.toIntOrNull() == CURRENT_INDEX_SCHEMA_VERSION
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Checks if the spatial index file exists and is compatible.
+     */
+    fun isIndexFileCompatible(indexFile: File): Boolean {
+        if (!indexFile.exists() || indexFile.length() < 1024) return false
+        return try {
+            SQLiteDatabase.openDatabase(indexFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { db ->
+                isIndexCompatible(db)
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
 
     suspend fun buildSpatialIndex(
         sourceGpkg: File,
