@@ -98,15 +98,15 @@ object GeoPackageStyle {
     val COLOR_ROAD_PATH = Color.rgb(150, 100, 80)
     val COLOR_ROAD_CASING = Color.rgb(200, 195, 185)
 
-    fun getPolygonPaint(layerName: String, fclass: String): Paint {
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.FILL
-        }
-        when (layerName) {
-            "gis_osm_water_a_free" -> paint.color = COLOR_WATER
-            "gis_osm_buildings_a_free" -> paint.color = COLOR_BUILDING_FILL
+    private val polygonPaintCache = mutableMapOf<String, Paint>()
+    private val linePaintCache = mutableMapOf<String, Paint>()
+
+    private fun resolvePolygonColor(layerName: String, fclass: String): Int {
+        return when (layerName) {
+            "gis_osm_water_a_free" -> COLOR_WATER
+            "gis_osm_buildings_a_free" -> COLOR_BUILDING_FILL
             "gis_osm_landuse_a_free" -> {
-                paint.color = when (fclass) {
+                when (fclass) {
                     "forest" -> COLOR_FOREST
                     "farmland", "meadow", "grass" -> COLOR_FARMLAND
                     "residential" -> COLOR_RESIDENTIAL
@@ -115,61 +115,67 @@ object GeoPackageStyle {
                 }
             }
             "gis_osm_natural_a_free" -> {
-                paint.color = when (fclass) {
+                when (fclass) {
                     "water" -> COLOR_WATER
                     "wood" -> COLOR_FOREST
                     "scrub", "heath", "grassland" -> COLOR_FARMLAND
                     else -> Color.rgb(230, 235, 225)
                 }
             }
-            else -> paint.color = Color.rgb(230, 230, 230)
+            else -> Color.rgb(230, 230, 230)
         }
-        return paint
+    }
+
+    fun getPolygonPaint(layerName: String, fclass: String): Paint {
+        val key = "$layerName:$fclass"
+        return polygonPaintCache.getOrPut(key) {
+            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.FILL
+                color = resolvePolygonColor(layerName, fclass)
+            }
+        }
     }
 
     fun getLinePaint(layerName: String, fclass: String, zoom: Int, isCasing: Boolean = false): Paint {
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeCap = Paint.Cap.ROUND
-            strokeJoin = Paint.Join.ROUND
-        }
+        val key = "$layerName:$fclass:$zoom:$isCasing"
+        return linePaintCache.getOrPut(key) {
+            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.STROKE
+                strokeCap = Paint.Cap.ROUND
+                strokeJoin = Paint.Join.ROUND
 
-        if (layerName == "gis_osm_waterways_free") {
-            paint.color = COLOR_WATER
-            paint.strokeWidth = if (fclass == "river") 2.5f else 1.2f
-            return paint
-        }
+                if (layerName == "gis_osm_waterways_free") {
+                    color = COLOR_WATER
+                    strokeWidth = if (fclass == "river") 2.5f else 1.2f
+                } else if (layerName == "gis_osm_railways_free") {
+                    color = Color.rgb(120, 120, 120)
+                    strokeWidth = 1.5f
+                } else {
+                    val baseWidth: Float = when {
+                        fclass.startsWith("motorway") || fclass.startsWith("trunk") -> if (zoom >= 14) 7f else if (zoom >= 11) 4.5f else 2.5f
+                        fclass.startsWith("primary") -> if (zoom >= 14) 5.5f else if (zoom >= 11) 3.5f else 2f
+                        fclass.startsWith("secondary") -> if (zoom >= 14) 4.5f else if (zoom >= 11) 2.5f else 1.5f
+                        fclass.startsWith("tertiary") -> if (zoom >= 14) 3.5f else 2f
+                        fclass in setOf("track", "path", "footway", "steps", "cycleway") -> 1.5f
+                        else -> if (zoom >= 14) 3f else 1.5f
+                    }
 
-        if (layerName == "gis_osm_railways_free") {
-            paint.color = Color.rgb(120, 120, 120)
-            paint.strokeWidth = 1.5f
-            return paint
+                    if (isCasing) {
+                        color = COLOR_ROAD_CASING
+                        strokeWidth = baseWidth + 2f
+                    } else {
+                        strokeWidth = baseWidth
+                        color = when {
+                            fclass.startsWith("motorway") || fclass.startsWith("trunk") -> COLOR_ROAD_MOTORWAY
+                            fclass.startsWith("primary") -> COLOR_ROAD_PRIMARY
+                            fclass.startsWith("secondary") || fclass.startsWith("tertiary") -> COLOR_ROAD_SECONDARY
+                            fclass == "track" -> COLOR_ROAD_TRACK
+                            fclass in setOf("path", "footway", "steps", "cycleway") -> COLOR_ROAD_PATH
+                            else -> COLOR_ROAD_RESIDENTIAL
+                        }
+                    }
+                }
+            }
         }
-
-        val baseWidth: Float = when {
-            fclass.startsWith("motorway") || fclass.startsWith("trunk") -> if (zoom >= 14) 7f else if (zoom >= 11) 4.5f else 2.5f
-            fclass.startsWith("primary") -> if (zoom >= 14) 5.5f else if (zoom >= 11) 3.5f else 2f
-            fclass.startsWith("secondary") -> if (zoom >= 14) 4.5f else if (zoom >= 11) 2.5f else 1.5f
-            fclass.startsWith("tertiary") -> if (zoom >= 14) 3.5f else 2f
-            fclass in setOf("track", "path", "footway", "steps", "cycleway") -> 1.5f
-            else -> if (zoom >= 14) 3f else 1.5f
-        }
-
-        if (isCasing) {
-            paint.color = COLOR_ROAD_CASING
-            paint.strokeWidth = baseWidth + 2f
-            return paint
-        }
-
-        paint.strokeWidth = baseWidth
-        paint.color = when {
-            fclass.startsWith("motorway") || fclass.startsWith("trunk") -> COLOR_ROAD_MOTORWAY
-            fclass.startsWith("primary") -> COLOR_ROAD_PRIMARY
-            fclass.startsWith("secondary") || fclass.startsWith("tertiary") -> COLOR_ROAD_SECONDARY
-            fclass == "track" -> COLOR_ROAD_TRACK
-            fclass in setOf("path", "footway", "steps", "cycleway") -> COLOR_ROAD_PATH
-            else -> COLOR_ROAD_RESIDENTIAL
-        }
-        return paint
     }
 }

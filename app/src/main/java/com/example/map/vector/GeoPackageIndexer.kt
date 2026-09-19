@@ -28,6 +28,12 @@ object GeoPackageIndexer {
         }
 
         val indexDb = SQLiteDatabase.openOrCreateDatabase(indexFile, null)
+        try {
+            indexDb.execSQL("PRAGMA journal_mode = WAL")
+            indexDb.execSQL("PRAGMA synchronous = NORMAL")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to apply PRAGMA optimizations: ${e.message}")
+        }
         val sourceDb = SQLiteDatabase.openDatabase(sourceGpkg.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
 
         try {
@@ -65,6 +71,7 @@ object GeoPackageIndexer {
                 }
             }
 
+            var anyBtreeFallback = false
             for (layerName in featureLayers) {
                 val geomCol = geomColumns[layerName] ?: "geom"
                 var useRtree = true
@@ -73,6 +80,7 @@ object GeoPackageIndexer {
                 } catch (e: Exception) {
                     Log.w(TAG, "R-Tree module unavailable (${e.message}), using B-Tree spatial table fallback for $layerName")
                     useRtree = false
+                    anyBtreeFallback = true
                     indexDb.execSQL(
                         """
                         CREATE TABLE IF NOT EXISTS btree_$layerName (
@@ -149,6 +157,13 @@ object GeoPackageIndexer {
                 onProgress(layerName, processedCount, layerTotal)
             }
 
+            if (anyBtreeFallback) {
+                Log.w(TAG, "ВНИМАНИЕ: R-Tree недоступен на этом устройстве, использован менее эффективный B-Tree fallback. Запросы к карте будут медленнее.")
+            } else {
+                Log.i(TAG, "Используется высокопроизводительный пространственный индекс R-Tree.")
+            }
+
+            indexDb.execSQL("INSERT OR REPLACE INTO index_metadata (key, value) VALUES ('has_btree_fallback', ?)", arrayOf(anyBtreeFallback.toString()))
             indexDb.execSQL("INSERT OR REPLACE INTO index_metadata (key, value) VALUES ('version', '1')")
             indexDb.execSQL("INSERT OR REPLACE INTO index_metadata (key, value) VALUES ('source_file', ?)", arrayOf(sourceGpkg.name))
 
@@ -201,5 +216,20 @@ object GeoPackageIndexer {
             Log.w(TAG, "Spatial index query failed for layer $layerName: ${e.message}")
         }
         return result
+    }
+
+    /**
+     * Checks whether any layer in the spatial index is using the slower B-Tree fallback.
+     */
+    fun isUsingBtreeFallback(indexDb: SQLiteDatabase): Boolean {
+        return try {
+            indexDb.rawQuery("SELECT value FROM index_metadata WHERE key = 'has_btree_fallback'", null).use { cursor ->
+                if (cursor.moveToFirst()) {
+                    cursor.getString(0) == "true"
+                } else false
+            }
+        } catch (_: Exception) {
+            false
+        }
     }
 }

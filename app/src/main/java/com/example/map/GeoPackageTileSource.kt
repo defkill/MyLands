@@ -71,6 +71,12 @@ class GeoPackageTileSource(
 
     fun isIndexReady(): Boolean = indexDb != null && indexDb?.isOpen == true
 
+    val isBtreeFallback: Boolean
+        get() {
+            val iDb = indexDb ?: return false
+            return if (iDb.isOpen) GeoPackageIndexer.isUsingBtreeFallback(iDb) else false
+        }
+
     /**
      * Renders a 512x512 RGB_565 bitmap tile for given zoom, x, y coordinates.
      */
@@ -123,6 +129,7 @@ class GeoPackageTileSource(
 
         // Batch query feature data
         val features = mutableListOf<GeoFeature>()
+        val uncachedFids = mutableListOf<Long>()
         for (fid in fids) {
             val cacheKey = "$layerName:$fid"
             val cached = featureCache.get(cacheKey)
@@ -130,29 +137,40 @@ class GeoPackageTileSource(
                 if (GeoPackageStyle.isFeatureVisibleAtZoom(layerName, cached.attributes, zoom)) {
                     features.add(cached)
                 }
-                continue
+            } else {
+                uncachedFids.add(fid)
             }
+        }
 
-            try {
-                sDb.rawQuery("SELECT geom, fclass, name FROM \"$layerName\" WHERE rowid = ?", arrayOf(fid.toString())).use { cursor ->
-                    if (cursor.moveToFirst()) {
-                        val geomBytes = cursor.getBlob(0)
-                        val fclass = cursor.getString(1) ?: ""
-                        val name = cursor.getString(2) ?: ""
-                        val attrs = mapOf("fclass" to fclass, "name" to name)
+        if (uncachedFids.isNotEmpty()) {
+            uncachedFids.chunked(500).forEach { chunk ->
+                val placeholders = chunk.joinToString(",") { "?" }
+                val args = chunk.map { it.toString() }.toTypedArray()
+                try {
+                    sDb.rawQuery(
+                        "SELECT rowid, geom, fclass, name FROM \"$layerName\" WHERE rowid IN ($placeholders)",
+                        args
+                    ).use { cursor ->
+                        while (cursor.moveToNext()) {
+                            val fid = cursor.getLong(0)
+                            val geomBytes = cursor.getBlob(1)
+                            val fclass = cursor.getString(2) ?: ""
+                            val name = cursor.getString(3) ?: ""
+                            val attrs = mapOf("fclass" to fclass, "name" to name)
 
-                        if (geomBytes != null) {
-                            val parsed = GeoPackageGeometryParser.parse(fid, geomBytes, attrs)
-                            if (parsed != null) {
-                                featureCache.put(cacheKey, parsed)
-                                if (GeoPackageStyle.isFeatureVisibleAtZoom(layerName, attrs, zoom)) {
-                                    features.add(parsed)
+                            if (geomBytes != null) {
+                                val parsed = GeoPackageGeometryParser.parse(fid, geomBytes, attrs)
+                                if (parsed != null) {
+                                    featureCache.put("$layerName:$fid", parsed)
+                                    if (GeoPackageStyle.isFeatureVisibleAtZoom(layerName, attrs, zoom)) {
+                                        features.add(parsed)
+                                    }
                                 }
                             }
                         }
                     }
-                }
-            } catch (_: Throwable) {}
+                } catch (_: Throwable) {}
+            }
         }
 
         if (features.isEmpty()) return

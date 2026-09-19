@@ -295,9 +295,10 @@ fun DataExchangeDialog(
                             viewModel.attachGpkgFile(targetFile)
                         }
                         if (source != null) {
+                            val indexMode = if (source.isBtreeFallback) " (B-Tree fallback - медленный режим)" else " (R-Tree)"
                             Toast.makeText(
                                 context,
-                                "Векторная карта GeoPackage '${source.name}' подключена!",
+                                "Векторная карта GeoPackage '${source.name}' подключена$indexMode",
                                 Toast.LENGTH_LONG
                             ).show()
                             onDismiss()
@@ -653,9 +654,10 @@ fun DataExchangeDialog(
                                                         }
                                                     }
                                                 }
+                                                val indexBadge = if (gpkg.isBtreeFallback) "⚠ B-Tree (медленный)" else "R-Tree"
                                                 Text(
-                                                    text = "Векторные OGC слои (OSM) • ${String.format(java.util.Locale.US, "%.1f МБ", sizeMb)}",
-                                                    color = Color(0xFF90A4AE),
+                                                    text = "Векторные слои OSM • $indexBadge • ${String.format(java.util.Locale.US, "%.1f МБ", sizeMb)}",
+                                                    color = if (gpkg.isBtreeFallback) Color(0xFFFFB74D) else Color(0xFF90A4AE),
                                                     fontSize = 10.sp
                                                 )
                                             }
