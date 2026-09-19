@@ -121,19 +121,55 @@ object GeoPackageGeometryParser {
                     if (numGeoms <= 0) return emptyList()
                     val result = mutableListOf<IndexedBoundingBox>()
                     var segCounter = 0
+                    var globalPointOffset = 0
                     for (g in 0 until numGeoms) {
                         if (buffer.remaining() < 5) break
                         val subOrder = if (buffer.get().toInt() == 1) ByteOrder.LITTLE_ENDIAN else ByteOrder.BIG_ENDIAN
                         buffer.order(subOrder)
-                        val subType = buffer.int % 1000
+                        val subRawType = buffer.int
+                        val subType = subRawType % 1000
                         if (subType == 2) {
                             val numPoints = buffer.int
-                            if (numPoints > 0 && buffer.remaining() >= numPoints * 16) {
-                                val bbox = computePointsBbox(buffer, numPoints)
+                            if (numPoints <= 0) continue
+                            val stride = when (subRawType / 1000) {
+                                1, 2 -> 24
+                                3 -> 32
+                                else -> 16
+                            }
+                            if (buffer.remaining() < numPoints * stride) break
+
+                            if (numPoints <= maxPointsPerSegment) {
+                                val bbox = computePointsBbox(buffer, numPoints, stride)
                                 if (bbox != null) {
-                                    result.add(IndexedBoundingBox((segCounter++).coerceAtMost(0xFFFF), bbox, 0, -1))
+                                    val gStart = globalPointOffset
+                                    val gEnd = globalPointOffset + numPoints - 1
+                                    result.add(IndexedBoundingBox((segCounter++).coerceAtMost(0xFFFF), bbox, gStart, gEnd))
+                                }
+                            } else {
+                                val points = ArrayList<DoublePoint>(numPoints)
+                                for (i in 0 until numPoints) {
+                                    val x = buffer.double
+                                    val y = buffer.double
+                                    if (stride > 16) {
+                                        buffer.position(buffer.position() + (stride - 16))
+                                    }
+                                    points.add(DoublePoint(x, y))
+                                }
+                                var start = 0
+                                while (start < numPoints) {
+                                    val end = (start + maxPointsPerSegment - 1).coerceAtMost(numPoints - 1)
+                                    val segPts = points.subList(start, end + 1)
+                                    val bbox = computeBbox(segPts)
+                                    if (bbox != null) {
+                                        val gStart = globalPointOffset + start
+                                        val gEnd = globalPointOffset + end
+                                        result.add(IndexedBoundingBox((segCounter++).coerceAtMost(0xFFFF), bbox, gStart, gEnd))
+                                    }
+                                    if (end >= numPoints - 1) break
+                                    start += (maxPointsPerSegment - 1)
                                 }
                             }
+                            globalPointOffset += numPoints
                         }
                     }
                     return result
@@ -150,8 +186,8 @@ object GeoPackageGeometryParser {
     }
 
     /**
-     * Reads only the specified point range [pointStart..pointEnd] directly from WKB LINESTRING,
-     * skipping preceeding points without creating intermediate DoublePoint objects.
+     * Reads only the specified point range [pointStart..pointEnd] directly from WKB LINESTRING or MULTILINESTRING,
+     * skipping preceding points without creating intermediate DoublePoint objects.
      */
     fun parsePointRange(
         fid: Long,
@@ -183,50 +219,105 @@ object GeoPackageGeometryParser {
             val rawType = buffer.int
             val baseType = rawType % 1000
 
-            if (baseType == 2) { // LINESTRING
-                val numPoints = buffer.int
-                if (numPoints <= 0 || pointStart >= numPoints) return null
-                val actualEnd = pointEnd.coerceAtMost(numPoints - 1)
-                if (actualEnd < pointStart) return null
+            when (baseType) {
+                2 -> { // LINESTRING
+                    val numPoints = buffer.int
+                    if (numPoints <= 0 || pointStart >= numPoints) return null
+                    val actualEnd = pointEnd.coerceAtMost(numPoints - 1)
+                    if (actualEnd < pointStart) return null
 
-                val stride = when (rawType / 1000) {
-                    1, 2 -> 24
-                    3 -> 32
-                    else -> 16
-                }
-
-                if (buffer.remaining() < numPoints * stride) return null
-
-                val pointCount = actualEnd - pointStart + 1
-                // Jump straight to pointStart
-                val startPos = buffer.position() + pointStart * stride
-                buffer.position(startPos)
-
-                val points = ArrayList<DoublePoint>(pointCount)
-                for (i in 0 until pointCount) {
-                    val lon = buffer.double
-                    val lat = buffer.double
-                    if (stride > 16) {
-                        buffer.position(buffer.position() + (stride - 16))
+                    val stride = when (rawType / 1000) {
+                        1, 2 -> 24
+                        3 -> 32
+                        else -> 16
                     }
-                    points.add(DoublePoint(lon, lat))
-                }
 
-                return GeoFeature(
-                    fid = fid,
-                    geometryType = "LINESTRING",
-                    rings = listOf(points),
-                    attributes = attributes
-                )
-            } else {
-                return parse(fid, geomBytes, attributes)
+                    if (buffer.remaining() < numPoints * stride) return null
+
+                    val pointCount = actualEnd - pointStart + 1
+                    val startPos = buffer.position() + pointStart * stride
+                    buffer.position(startPos)
+
+                    val points = ArrayList<DoublePoint>(pointCount)
+                    for (i in 0 until pointCount) {
+                        val lon = buffer.double
+                        val lat = buffer.double
+                        if (stride > 16) {
+                            buffer.position(buffer.position() + (stride - 16))
+                        }
+                        points.add(DoublePoint(lon, lat))
+                    }
+
+                    return GeoFeature(
+                        fid = fid,
+                        geometryType = "LINESTRING",
+                        rings = listOf(points),
+                        attributes = attributes
+                    )
+                }
+                5 -> { // MULTILINESTRING
+                    val numGeoms = buffer.int
+                    if (numGeoms <= 0) return null
+                    var globalOffset = 0
+                    for (g in 0 until numGeoms) {
+                        if (buffer.remaining() < 5) break
+                        val subOrder = if (buffer.get().toInt() == 1) ByteOrder.LITTLE_ENDIAN else ByteOrder.BIG_ENDIAN
+                        buffer.order(subOrder)
+                        val subRawType = buffer.int
+                        val subType = subRawType % 1000
+                        if (subType == 2) {
+                            val numPoints = buffer.int
+                            if (numPoints <= 0) continue
+                            val stride = when (subRawType / 1000) {
+                                1, 2 -> 24
+                                3 -> 32
+                                else -> 16
+                            }
+                            if (buffer.remaining() < numPoints * stride) return null
+                            val lineStart = globalOffset
+                            val lineEnd = globalOffset + numPoints - 1
+                            globalOffset += numPoints
+
+                            if (pointStart <= lineEnd && pointEnd >= lineStart) {
+                                val localStart = (pointStart - lineStart).coerceAtLeast(0)
+                                val localEnd = (pointEnd - lineStart).coerceAtMost(numPoints - 1)
+                                val count = localEnd - localStart + 1
+                                if (count > 0) {
+                                    val currentPos = buffer.position()
+                                    buffer.position(currentPos + localStart * stride)
+                                    val points = ArrayList<DoublePoint>(count)
+                                    for (i in 0 until count) {
+                                        val lon = buffer.double
+                                        val lat = buffer.double
+                                        if (stride > 16) {
+                                            buffer.position(buffer.position() + (stride - 16))
+                                        }
+                                        points.add(DoublePoint(lon, lat))
+                                    }
+                                    return GeoFeature(
+                                        fid = fid,
+                                        geometryType = "MULTILINESTRING",
+                                        rings = listOf(points),
+                                        attributes = attributes
+                                    )
+                                }
+                            } else {
+                                buffer.position(buffer.position() + numPoints * stride)
+                            }
+                        }
+                    }
+                    return null
+                }
+                else -> {
+                    return parse(fid, geomBytes, attributes)
+                }
             }
         } catch (_: Throwable) {
             return null
         }
     }
 
-    private fun computePointsBbox(buffer: ByteBuffer, numPoints: Int): GeoBoundingBox? {
+    private fun computePointsBbox(buffer: ByteBuffer, numPoints: Int, stride: Int = 16): GeoBoundingBox? {
         if (numPoints <= 0) return null
         var minX = Double.POSITIVE_INFINITY
         var maxX = Double.NEGATIVE_INFINITY
@@ -235,6 +326,9 @@ object GeoPackageGeometryParser {
         for (i in 0 until numPoints) {
             val x = buffer.double
             val y = buffer.double
+            if (stride > 16) {
+                buffer.position(buffer.position() + (stride - 16))
+            }
             if (x < minX) minX = x
             if (x > maxX) maxX = x
             if (y < minY) minY = y

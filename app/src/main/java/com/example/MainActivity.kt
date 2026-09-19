@@ -35,6 +35,7 @@ class MainActivity : ComponentActivity() {
     }
   }
 
+  @Suppress("DEPRECATION")
   override fun onTrimMemory(level: Int) {
     super.onTrimMemory(level)
     if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE) {

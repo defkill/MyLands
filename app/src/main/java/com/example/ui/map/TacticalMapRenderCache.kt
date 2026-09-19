@@ -83,6 +83,14 @@ class TacticalMapRenderCache {
         setShadowLayer(6f, 0f, 0f, android.graphics.Color.BLACK)
     }
 
+    val contourTextPaint = AndroidPaint().apply {
+        color = android.graphics.Color.rgb(198, 150, 100)
+        textSize = 22f
+        isAntiAlias = true
+        textAlign = AndroidPaint.Align.CENTER
+        setShadowLayer(4f, 0f, 0f, android.graphics.Color.BLACK)
+    }
+
     // PathEffects
     val trackDrDashEffect = PathEffect.dashPathEffect(floatArrayOf(20f, 15f), 0f)
     val sightLineDashEffect = PathEffect.dashPathEffect(floatArrayOf(20f, 12f), 0f)

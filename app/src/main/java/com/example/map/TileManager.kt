@@ -499,7 +499,8 @@ class TileManager(private val context: Context) {
         val sections = listOf(
             "cache/" to baseCacheDir,
             "maps/" to File(context.filesDir, "maps"),
-            "packages/" to File(context.filesDir, "packages")
+            "packages/" to File(context.filesDir, "packages"),
+            "hgt/" to File(context.filesDir, "hgt")
         )
 
         var totalBytes = 0L

@@ -1,6 +1,7 @@
 package com.example.util
 
 import java.io.File
+import java.util.zip.ZipFile
 
 object SafeZipExtraction {
     /**
@@ -19,4 +20,24 @@ object SafeZipExtraction {
             null
         }
     }
+
+    /**
+     * Validates that [zipFile] is a non-corrupt, valid ZIP archive that can be safely traversed.
+     */
+    fun verifyZipIntegrity(zipFile: File): Boolean {
+        if (!zipFile.exists() || zipFile.length() < 22) return false
+        return try {
+            ZipFile(zipFile).use { zip ->
+                val entries = zip.entries()
+                while (entries.hasMoreElements()) {
+                    val entry = entries.nextElement()
+                    if (entry.name.isEmpty()) return false
+                }
+            }
+            true
+        } catch (_: Throwable) {
+            false
+        }
+    }
 }
+

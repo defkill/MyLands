@@ -186,6 +186,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // watcher started in init reads these. Declaring them further down left them null at that
     // moment, which is exactly what crashed the app on launch once before.
     val elevationEngine = ElevationEngine(application)
+    val contourEngine = com.example.data.elevation.ContourEngine(elevationEngine)
 
     private val _hasElevationData = MutableStateFlow(elevationEngine.hasAnyTiles())
     val hasElevationData: StateFlow<Boolean> = _hasElevationData.asStateFlow()
@@ -703,6 +704,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun refreshElevationAvailability() {
         _hasElevationData.value = elevationEngine.hasAnyTiles()
+        contourEngine.clearCache()
     }
 
     /** Tile names covering the current view, and which are missing. */

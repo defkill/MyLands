@@ -132,4 +132,32 @@ class MbtilesMergerTest {
 
         assertArrayEquals(bytesB, blob)
     }
+
+    @Test
+    fun testVerifySqliteIntegrity_ValidDatabase_ReturnsTrue() {
+        val file = createTestMbtiles(fileName = "valid.mbtiles", tiles = listOf(Triple(5, 10, 10)))
+        assertTrue(MbtilesMerger.verifySqliteIntegrity(file))
+    }
+
+    @Test
+    fun testVerifySqliteIntegrity_CorruptFile_ReturnsFalse() {
+        val corrupt = File(tempDir, "corrupt.mbtiles")
+        corrupt.writeBytes("This is not a SQLite database file at all".toByteArray())
+        assertFalse(MbtilesMerger.verifySqliteIntegrity(corrupt))
+    }
+
+    @Test
+    fun testMergeInto_IncrementalAddition_PreservesExistingAndAddsNew() {
+        val base = createTestMbtiles(fileName = "base.mbtiles", tiles = listOf(Triple(5, 1, 1)))
+        val add = createTestMbtiles(fileName = "add.mbtiles", tiles = listOf(Triple(5, 2, 2)))
+
+        val result = runBlocking { MbtilesMerger.mergeInto(base, listOf(add)) }
+        assertTrue(result is MergeResult.Success)
+
+        val merged = MbtilesTileSource.create(base)
+        assertNotNull(merged)
+        assertNotNull(merged?.getTileBitmap(5, 1, 1))
+        assertNotNull(merged?.getTileBitmap(5, 2, 2))
+    }
 }
+

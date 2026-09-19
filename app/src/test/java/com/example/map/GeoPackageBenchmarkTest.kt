@@ -39,7 +39,7 @@ class GeoPackageBenchmarkTest {
         coordinates: List<List<DoublePoint>>,
         envelope: GeoBoundingBox? = null
     ): ByteArray {
-        val buffer = ByteBuffer.allocate(coordinates.sumOf { it.size } * 16 + 64).order(ByteOrder.LITTLE_ENDIAN)
+        val buffer = ByteBuffer.allocate(coordinates.sumOf { it.size } * 16 + coordinates.size * 32 + 128).order(ByteOrder.LITTLE_ENDIAN)
         val envelopeIndicator = if (envelope != null) 1 else 0
         val flags = 1 or (envelopeIndicator shl 1)
 
@@ -73,6 +73,18 @@ class GeoPackageBenchmarkTest {
                 coordinates.forEach { ring ->
                     buffer.putInt(ring.size)
                     ring.forEach { pt ->
+                        buffer.putDouble(pt.lon)
+                        buffer.putDouble(pt.lat)
+                    }
+                }
+            }
+            5 -> { // MultiLineString
+                buffer.putInt(coordinates.size)
+                coordinates.forEach { line ->
+                    buffer.put(1.toByte())
+                    buffer.putInt(2) // LineString
+                    buffer.putInt(line.size)
+                    line.forEach { pt ->
                         buffer.putDouble(pt.lon)
                         buffer.putDouble(pt.lat)
                     }
@@ -236,5 +248,80 @@ class GeoPackageBenchmarkTest {
         assertTrue(tileSource.isIndexOutdated)
         assertFalse(tileSource.isIndexReady())
         tileSource.close()
+    }
+
+    @Test
+    fun testMultiLineString_SegmentedAndParsedCorrectly() {
+        // Create MULTILINESTRING with 2 sub-lines:
+        // Sub-line 1: 120 points (lon: 30.0 + i*0.01, lat: 50.0 + i*0.01)
+        // Sub-line 2: 30 points (lon: 35.0 + i*0.01, lat: 55.0 + i*0.01)
+        val line1 = (0 until 120).map { DoublePoint(30.0 + it * 0.01, 50.0 + it * 0.01) }
+        val line2 = (0 until 30).map { DoublePoint(35.0 + it * 0.01, 55.0 + it * 0.01) }
+        val geomBytes = createGpkgGeometryBlob(wkbType = 5, coordinates = listOf(line1, line2))
+
+        val segments = com.example.map.vector.GeoPackageGeometryParser.extractSegmentedBoundingBoxes(geomBytes, maxPointsPerSegment = 50)
+        // Line 1 (120 pts) -> 3 segments: 0..49, 49..98, 98..119
+        // Line 2 (30 pts)  -> 1 segment: 120..149
+        assertEquals(4, segments.size)
+
+        assertEquals(0, segments[0].pointStart)
+        assertEquals(49, segments[0].pointEnd)
+
+        assertEquals(49, segments[1].pointStart)
+        assertEquals(98, segments[1].pointEnd)
+
+        assertEquals(98, segments[2].pointStart)
+        assertEquals(119, segments[2].pointEnd)
+
+        assertEquals(120, segments[3].pointStart)
+        assertEquals(149, segments[3].pointEnd)
+
+        // Parse segment 1 (points 49..98 of subline 1)
+        val seg1Feature = com.example.map.vector.GeoPackageGeometryParser.parsePointRange(
+            fid = 101L,
+            geomBytes = geomBytes,
+            pointStart = segments[1].pointStart,
+            pointEnd = segments[1].pointEnd
+        )
+        assertNotNull(seg1Feature)
+        assertEquals("MULTILINESTRING", seg1Feature!!.geometryType)
+        assertEquals(1, seg1Feature.rings.size)
+        assertEquals(50, seg1Feature.rings[0].size)
+        assertEquals(line1[49].lon, seg1Feature.rings[0].first().lon, 1e-6)
+        assertEquals(line1[98].lon, seg1Feature.rings[0].last().lon, 1e-6)
+
+        // Parse segment 3 (points 0..29 of subline 2, global 120..149)
+        val seg3Feature = com.example.map.vector.GeoPackageGeometryParser.parsePointRange(
+            fid = 101L,
+            geomBytes = geomBytes,
+            pointStart = segments[3].pointStart,
+            pointEnd = segments[3].pointEnd
+        )
+        assertNotNull(seg3Feature)
+        assertEquals(1, seg3Feature!!.rings.size)
+        assertEquals(30, seg3Feature.rings[0].size)
+        assertEquals(line2[0].lon, seg3Feature.rings[0].first().lon, 1e-6)
+        assertEquals(line2[29].lon, seg3Feature.rings[0].last().lon, 1e-6)
+    }
+
+    @Test
+    fun testZoomRules_SqlAndKotlinMatch() {
+        val testRoadClasses = listOf("motorway", "primary", "secondary", "tertiary", "residential", "service", "track_grade1", "footway")
+        for (zoom in 5..16) {
+            val sqlFilter = GeoPackageStyle.sqlVisibilityFilter("gis_osm_roads_free", zoom)
+            for (fclass in testRoadClasses) {
+                val isVisible = GeoPackageStyle.isFeatureVisibleAtZoom("gis_osm_roads_free", mapOf("fclass" to fclass), zoom)
+                if (sqlFilter != null) {
+                    val sqlMatches = if (sqlFilter.second.isNotEmpty()) {
+                        fclass in sqlFilter.second
+                    } else {
+                        !sqlFilter.first.contains("'$fclass'") && !(sqlFilter.first.contains("track_grade") && fclass.startsWith("track_grade"))
+                    }
+                    assertEquals("Mismatch for road $fclass at zoom $zoom", isVisible, sqlMatches)
+                } else {
+                    assertTrue("All roads should be visible at zoom $zoom", isVisible)
+                }
+            }
+        }
     }
 }

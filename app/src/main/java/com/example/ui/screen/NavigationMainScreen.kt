@@ -297,7 +297,8 @@ fun NavigationMainScreen(
                 onCandidatePointDragStarted = { viewModel.onCandidatePointDragStarted(it) },
                 onCandidatePointDragMoved = { viewModel.updateCandidatePointPosition(it) },
                 onRayEndpointTapped = { showTriangulationDialog = true },
-                manualPosition = manualPositionOverride
+                manualPosition = manualPositionOverride,
+                contourEngine = viewModel.contourEngine
             )
 
             // 2. Top Tactical Header Overlay

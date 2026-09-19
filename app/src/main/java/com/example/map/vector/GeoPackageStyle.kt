@@ -21,147 +21,92 @@ object GeoPackageStyle {
         "gis_osm_places_free"
     )
 
-    fun isLayerPossiblyVisibleAtZoom(layerName: String, zoom: Int): Boolean = when (layerName) {
-        "gis_osm_buildings_a_free" -> isBuildingVisibleAtZoom(zoom)
-        "gis_osm_water_a_free" -> isWaterVisibleAtZoom(zoom)
-        "gis_osm_railways_free" -> zoom >= 10
-        "gis_osm_roads_free" -> true
-        "gis_osm_landuse_a_free" -> true
-        "gis_osm_natural_a_free" -> true
-        "gis_osm_waterways_free" -> true
-        "gis_osm_places_free" -> true
-        "gis_osm_pois_free" -> true
-        else -> zoom >= 13
+    sealed class ZoomRule(val maxZoomExclusive: Int) {
+        class IncludeOnly(maxZoom: Int, val classes: List<String>) : ZoomRule(maxZoom)
+        class Exclude(maxZoom: Int, val classes: List<String>, val prefixExclude: String? = null) : ZoomRule(maxZoom)
+    }
+
+    private val LAYER_MIN_ZOOMS = mapOf(
+        "gis_osm_water_a_free" to 6,
+        "gis_osm_railways_free" to 10,
+        "gis_osm_buildings_a_free" to 14
+    )
+
+    private val LAYER_ZOOM_RULES = mapOf(
+        "gis_osm_roads_free" to listOf(
+            ZoomRule.IncludeOnly(8, listOf("motorway", "trunk", "primary", "motorway_link", "trunk_link", "primary_link")),
+            ZoomRule.IncludeOnly(11, listOf("motorway", "trunk", "primary", "secondary", "tertiary", "motorway_link", "trunk_link", "primary_link", "secondary_link")),
+            ZoomRule.Exclude(14, listOf("path", "footway", "steps", "cycleway", "pedestrian", "service"), prefixExclude = "track_grade")
+        ),
+        "gis_osm_landuse_a_free" to listOf(
+            ZoomRule.IncludeOnly(9, listOf("forest", "residential", "military")),
+            ZoomRule.IncludeOnly(12, listOf("forest", "residential", "military", "farmland", "meadow", "commercial", "industrial"))
+        ),
+        "gis_osm_natural_a_free" to listOf(
+            ZoomRule.IncludeOnly(9, listOf("water", "wood", "glacier")),
+            ZoomRule.IncludeOnly(12, listOf("water", "wood", "glacier", "scrub", "heath", "grassland", "wetland"))
+        ),
+        "gis_osm_waterways_free" to listOf(
+            ZoomRule.IncludeOnly(10, listOf("river")),
+            ZoomRule.IncludeOnly(13, listOf("river", "canal", "stream"))
+        ),
+        "gis_osm_places_free" to listOf(
+            ZoomRule.IncludeOnly(6, listOf("country")),
+            ZoomRule.IncludeOnly(9, listOf("country", "state", "city")),
+            ZoomRule.IncludeOnly(12, listOf("country", "state", "city", "town")),
+            ZoomRule.IncludeOnly(14, listOf("country", "state", "city", "town", "village"))
+        ),
+        "gis_osm_pois_free" to listOf(
+            ZoomRule.IncludeOnly(13, listOf("hospital", "police", "fire_station", "airport", "helipad")),
+            ZoomRule.IncludeOnly(15, listOf("hospital", "police", "fire_station", "airport", "helipad", "pharmacy", "fuel", "bank"))
+        )
+    )
+
+    fun isLayerPossiblyVisibleAtZoom(layerName: String, zoom: Int): Boolean {
+        val minZoom = LAYER_MIN_ZOOMS[layerName]
+        return if (minZoom != null) zoom >= minZoom else (if (layerName in RENDER_LAYER_ORDER) true else zoom >= 13)
     }
 
     fun sqlVisibilityFilter(layerName: String, zoom: Int): Pair<String, List<String>>? {
-        when (layerName) {
-            "gis_osm_roads_free" -> {
-                return when {
-                    zoom < 8 -> {
-                        val classes = listOf("motorway", "trunk", "primary", "motorway_link", "trunk_link", "primary_link")
-                        val placeholders = classes.joinToString(",") { "?" }
-                        "fclass IN ($placeholders)" to classes
+        val rules = LAYER_ZOOM_RULES[layerName] ?: return null
+        for (rule in rules) {
+            if (zoom < rule.maxZoomExclusive) {
+                return when (rule) {
+                    is ZoomRule.IncludeOnly -> {
+                        val placeholders = rule.classes.joinToString(",") { "?" }
+                        "fclass IN ($placeholders)" to rule.classes
                     }
-                    zoom < 11 -> {
-                        val classes = listOf("motorway", "trunk", "primary", "secondary", "tertiary", "motorway_link", "trunk_link", "primary_link", "secondary_link")
-                        val placeholders = classes.joinToString(",") { "?" }
-                        "fclass IN ($placeholders)" to classes
+                    is ZoomRule.Exclude -> {
+                        val placeholders = rule.classes.joinToString(",") { "'$it'" }
+                        val sql = if (rule.prefixExclude != null) {
+                            "fclass NOT IN ($placeholders) AND fclass NOT LIKE '${rule.prefixExclude}%'"
+                        } else {
+                            "fclass NOT IN ($placeholders)"
+                        }
+                        sql to emptyList()
                     }
-                    zoom < 14 -> {
-                        "fclass NOT IN ('path','footway','steps','cycleway','pedestrian','service') AND fclass NOT LIKE 'track_grade%'" to emptyList()
-                    }
-                    else -> null
                 }
             }
-            "gis_osm_landuse_a_free" -> {
-                val classes = when {
-                    zoom < 9 -> listOf("forest", "residential", "military")
-                    zoom < 12 -> listOf("forest", "residential", "military", "farmland", "meadow", "commercial", "industrial")
-                    else -> return null
-                }
-                val placeholders = classes.joinToString(",") { "?" }
-                return "fclass IN ($placeholders)" to classes
-            }
-            "gis_osm_natural_a_free" -> {
-                val classes = when {
-                    zoom < 9 -> listOf("water", "wood", "glacier")
-                    zoom < 12 -> listOf("water", "wood", "glacier", "scrub", "heath", "grassland", "wetland")
-                    else -> return null
-                }
-                val placeholders = classes.joinToString(",") { "?" }
-                return "fclass IN ($placeholders)" to classes
-            }
-            "gis_osm_waterways_free" -> {
-                val classes = when {
-                    zoom < 10 -> listOf("river")
-                    zoom < 13 -> listOf("river", "canal", "stream")
-                    else -> return null
-                }
-                val placeholders = classes.joinToString(",") { "?" }
-                return "fclass IN ($placeholders)" to classes
-            }
-            "gis_osm_places_free" -> {
-                val classes = when {
-                    zoom < 6 -> listOf("country")
-                    zoom < 9 -> listOf("country", "state", "city")
-                    zoom < 12 -> listOf("country", "state", "city", "town")
-                    zoom < 14 -> listOf("country", "state", "city", "town", "village")
-                    else -> return null
-                }
-                val placeholders = classes.joinToString(",") { "?" }
-                return "fclass IN ($placeholders)" to classes
-            }
-            "gis_osm_pois_free" -> {
-                val classes = when {
-                    zoom < 13 -> listOf("hospital", "police", "fire_station", "airport", "helipad")
-                    zoom < 15 -> listOf("hospital", "police", "fire_station", "airport", "helipad", "pharmacy", "fuel", "bank")
-                    else -> return null
-                }
-                val placeholders = classes.joinToString(",") { "?" }
-                return "fclass IN ($placeholders)" to classes
-            }
-            else -> return null
         }
+        return null
     }
 
     fun isFeatureVisibleAtZoom(layerName: String, attributes: Map<String, Any?>, zoom: Int): Boolean {
+        val minZoom = LAYER_MIN_ZOOMS[layerName]
+        if (minZoom != null && zoom < minZoom) return false
+        if (layerName !in RENDER_LAYER_ORDER && zoom < 13) return false
+
+        val rules = LAYER_ZOOM_RULES[layerName] ?: return true
         val fclass = (attributes["fclass"] as? String)?.lowercase() ?: ""
-        return when (layerName) {
-            "gis_osm_roads_free" -> isRoadVisibleAtZoom(fclass, zoom)
-            "gis_osm_landuse_a_free" -> isLanduseVisibleAtZoom(fclass, zoom)
-            "gis_osm_natural_a_free" -> isNaturalVisibleAtZoom(fclass, zoom)
-            "gis_osm_water_a_free" -> isWaterVisibleAtZoom(zoom)
-            "gis_osm_waterways_free" -> isWaterwayVisibleAtZoom(fclass, zoom)
-            "gis_osm_buildings_a_free" -> isBuildingVisibleAtZoom(zoom)
-            "gis_osm_railways_free" -> zoom >= 10
-            "gis_osm_places_free" -> isPlaceVisibleAtZoom(fclass, zoom)
-            "gis_osm_pois_free" -> isPoiVisibleAtZoom(fclass, zoom)
-            else -> zoom >= 13
+        for (rule in rules) {
+            if (zoom < rule.maxZoomExclusive) {
+                return when (rule) {
+                    is ZoomRule.IncludeOnly -> fclass in rule.classes
+                    is ZoomRule.Exclude -> fclass !in rule.classes && (rule.prefixExclude == null || !fclass.startsWith(rule.prefixExclude))
+                }
+            }
         }
-    }
-
-    private fun isRoadVisibleAtZoom(fclass: String, zoom: Int): Boolean = when {
-        zoom < 8 -> fclass in setOf("motorway", "trunk", "primary", "motorway_link", "trunk_link", "primary_link")
-        zoom < 11 -> fclass in setOf("motorway", "trunk", "primary", "secondary", "tertiary", "motorway_link", "trunk_link", "primary_link", "secondary_link")
-        zoom < 14 -> fclass !in setOf("path", "footway", "steps", "cycleway", "pedestrian", "service") && !fclass.startsWith("track_grade")
-        else -> true // All roads, streets, tracks and trails visible at z >= 14
-    }
-
-    private fun isLanduseVisibleAtZoom(fclass: String, zoom: Int): Boolean = when {
-        zoom < 9 -> fclass in setOf("forest", "residential", "military")
-        zoom < 12 -> fclass in setOf("forest", "residential", "military", "farmland", "meadow", "commercial", "industrial")
-        else -> true
-    }
-
-    private fun isNaturalVisibleAtZoom(fclass: String, zoom: Int): Boolean = when {
-        zoom < 9 -> fclass in setOf("water", "wood", "glacier")
-        zoom < 12 -> fclass in setOf("water", "wood", "glacier", "scrub", "heath", "grassland", "wetland")
-        else -> true
-    }
-
-    private fun isWaterVisibleAtZoom(zoom: Int): Boolean = zoom >= 6
-
-    private fun isWaterwayVisibleAtZoom(fclass: String, zoom: Int): Boolean = when {
-        zoom < 10 -> fclass in setOf("river")
-        zoom < 13 -> fclass in setOf("river", "canal", "stream")
-        else -> true
-    }
-
-    private fun isBuildingVisibleAtZoom(zoom: Int): Boolean = zoom >= 14
-
-    private fun isPlaceVisibleAtZoom(fclass: String, zoom: Int): Boolean = when {
-        zoom < 6 -> fclass in setOf("country")
-        zoom < 9 -> fclass in setOf("country", "state", "city")
-        zoom < 12 -> fclass in setOf("country", "state", "city", "town")
-        zoom < 14 -> fclass in setOf("country", "state", "city", "town", "village")
-        else -> true
-    }
-
-    private fun isPoiVisibleAtZoom(fclass: String, zoom: Int): Boolean = when {
-        zoom < 13 -> fclass in setOf("hospital", "police", "fire_station", "airport", "helipad")
-        zoom < 15 -> fclass in setOf("hospital", "police", "fire_station", "airport", "helipad", "pharmacy", "fuel", "bank")
-        else -> true
+        return true
     }
 
     // Colors

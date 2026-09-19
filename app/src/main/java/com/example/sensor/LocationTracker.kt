@@ -1,10 +1,12 @@
 package com.example.sensor
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
@@ -89,10 +91,26 @@ class LocationTracker(private val context: Context) : LocationListener {
 
     private var receiverRegistered = false
 
+    /** Checks whether ACCESS_FINE_LOCATION or ACCESS_COARSE_LOCATION is granted. */
+    fun hasPermission(): Boolean {
+        return ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED || ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.ACCESS_COARSE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
     /**
      * Drops registrations for providers that were turned off and adds any that appeared.
      */
     fun syncProviders() {
+        if (!hasPermission()) {
+            _gpsStatus.value = GpsStatus.NO_PERMISSION
+            return
+        }
+
         val gpsEnabled = safeIsProviderEnabled(LocationManager.GPS_PROVIDER)
         val networkEnabled = safeIsProviderEnabled(LocationManager.NETWORK_PROVIDER)
 
@@ -124,6 +142,11 @@ class LocationTracker(private val context: Context) : LocationListener {
         // subscribed to the broadcast — and turning GPS on from the shade did nothing until
         // the user pressed the locate button or restarted the app.
         registerProvidersReceiver()
+
+        if (!hasPermission()) {
+            _gpsStatus.value = GpsStatus.NO_PERMISSION
+            return
+        }
 
         val gpsEnabled = safeIsProviderEnabled(LocationManager.GPS_PROVIDER)
         val networkEnabled = safeIsProviderEnabled(LocationManager.NETWORK_PROVIDER)
@@ -169,7 +192,7 @@ class LocationTracker(private val context: Context) : LocationListener {
             }
         } catch (e: SecurityException) {
             _gpsStatus.value = GpsStatus.NO_PERMISSION
-            Log.e(TAG, "Location permission missing", e)
+            Log.w(TAG, "Location permission not granted: ${e.message}")
         } catch (e: Exception) {
             _gpsStatus.value = GpsStatus.SEARCHING
             // Never swallow this silently: a failure here means no position and no track.

@@ -22,6 +22,37 @@ object MbtilesMerger {
     private const val TAG = "MbtilesMerger"
 
     /**
+     * Verifies SQLite database file integrity using PRAGMA quick_check.
+     */
+    fun verifySqliteIntegrity(file: File): Boolean {
+        if (!file.exists() || file.length() < 100) return false
+        var db: SQLiteDatabase? = null
+        return try {
+            db = SQLiteDatabase.openDatabase(
+                file.absolutePath,
+                null,
+                SQLiteDatabase.OPEN_READONLY or SQLiteDatabase.NO_LOCALIZED_COLLATORS
+            )
+            val isOk = db.rawQuery("PRAGMA quick_check", null).use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val result = cursor.getString(0)
+                    result.equals("ok", ignoreCase = true)
+                } else {
+                    false
+                }
+            }
+            isOk
+        } catch (e: Throwable) {
+            Log.w(TAG, "Integrity check failed for ${file.name}: ${e.message}")
+            false
+        } finally {
+            try {
+                db?.close()
+            } catch (_: Throwable) {}
+        }
+    }
+
+    /**
      * Merges [sourceFiles] into a new file at [outputFile].
      *
      * Tiles are matched by (zoom_level, tile_column, tile_row). When the same tile
@@ -36,6 +67,13 @@ object MbtilesMerger {
         val existingSources = sourceFiles.filter { it.exists() && it.length() > 0 }
         if (existingSources.isEmpty()) {
             return@withContext MergeResult.Error("Нет файлов для слияния")
+        }
+
+        // Verify integrity of all source files
+        for (src in existingSources) {
+            if (!verifySqliteIntegrity(src)) {
+                return@withContext MergeResult.Error("Файл '${src.name}' поврежден или не является корректной базой SQLite.")
+            }
         }
 
         if (outputFile.exists()) {
@@ -171,4 +209,92 @@ object MbtilesMerger {
             } catch (_: Exception) {}
         }
     }
+
+    /**
+     * Merges [sourceFiles] incrementally INTO an existing [targetFile] in-place.
+     * If [targetFile] does not exist yet, creates it.
+     */
+    suspend fun mergeInto(
+        targetFile: File,
+        sourceFiles: List<File>,
+        onProgress: (current: Int, total: Int) -> Unit = { _, _ -> }
+    ): MergeResult = withContext(Dispatchers.IO) {
+        val existingSources = sourceFiles.filter { it.exists() && it.length() > 0 && it.absolutePath != targetFile.absolutePath }
+        if (existingSources.isEmpty()) {
+            return@withContext if (targetFile.exists()) {
+                MergeResult.Success(targetFile, 0)
+            } else {
+                MergeResult.Error("Нет исходных файлов для слияния")
+            }
+        }
+
+        if (!targetFile.exists()) {
+            return@withContext merge(existingSources, targetFile, onProgress)
+        }
+
+        if (!verifySqliteIntegrity(targetFile)) {
+            return@withContext MergeResult.Error("Целевой файл '${targetFile.name}' поврежден.")
+        }
+
+        for (src in existingSources) {
+            if (!verifySqliteIntegrity(src)) {
+                return@withContext MergeResult.Error("Исходный файл '${src.name}' поврежден.")
+            }
+        }
+
+        var db: SQLiteDatabase? = null
+        try {
+            db = SQLiteDatabase.openOrCreateDatabase(targetFile, null)
+
+            // Ensure tables exist
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS tiles (
+                    zoom_level INTEGER,
+                    tile_column INTEGER,
+                    tile_row INTEGER,
+                    tile_data BLOB,
+                    PRIMARY KEY (zoom_level, tile_column, tile_row)
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE TABLE IF NOT EXISTS metadata (name TEXT, value TEXT)")
+
+            existingSources.forEachIndexed { index, sourceFile ->
+                val alias = "inc$index"
+                db.execSQL("ATTACH DATABASE ? AS $alias", arrayOf(sourceFile.absolutePath))
+                try {
+                    var hasTiles = false
+                    try {
+                        db.rawQuery(
+                            "SELECT name FROM $alias.sqlite_master WHERE type IN ('table', 'view') AND name = 'tiles'",
+                            null
+                        ).use { c -> hasTiles = c.count > 0 }
+                    } catch (_: Throwable) {}
+
+                    if (hasTiles) {
+                        db.execSQL(
+                            "INSERT OR REPLACE INTO tiles (zoom_level, tile_column, tile_row, tile_data) " +
+                            "SELECT zoom_level, tile_column, tile_row, tile_data FROM $alias.tiles"
+                        )
+                    }
+                } finally {
+                    try {
+                        db.execSQL("DETACH DATABASE $alias")
+                    } catch (_: Throwable) {}
+                }
+                onProgress(index + 1, existingSources.size)
+            }
+
+            MergeResult.Success(targetFile, tileSourceCount = existingSources.size)
+        } catch (e: Exception) {
+            Log.e(TAG, "Incremental merge failed: ${e.message}", e)
+            MergeResult.Error(e.localizedMessage ?: (e.message ?: "Ошибка инкрементального слияния"))
+        } finally {
+            try {
+                db?.close()
+            } catch (_: Exception) {}
+        }
+    }
 }
+

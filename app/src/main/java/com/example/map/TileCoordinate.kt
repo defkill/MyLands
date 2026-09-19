@@ -109,6 +109,11 @@ object MapProjection {
         return Math.toDegrees(atan(sinh(n)))
     }
 
+    fun tileXToLon(tileX: Int, zoom: Int): Double = worldXToLon(tileX * TILE_SIZE, zoom.toDouble())
+    fun tileYToLat(tileY: Int, zoom: Int): Double = worldYToLat(tileY * TILE_SIZE, zoom.toDouble())
+    fun lonToTileX(lonDeg: Double, zoom: Int): Int = (lonToWorldX(lonDeg, zoom.toDouble()) / TILE_SIZE).toInt()
+    fun latToTileY(latDeg: Double, zoom: Int): Int = (latToWorldY(latDeg, zoom.toDouble()) / TILE_SIZE).toInt()
+
     fun geoToScreen(
         geoPoint: GeoPoint,
         centerLat: Double,

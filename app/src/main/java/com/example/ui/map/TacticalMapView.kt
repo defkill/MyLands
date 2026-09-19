@@ -70,6 +70,8 @@ fun TacticalMapView(
     onCandidatePointDragMoved: ((GeoPoint) -> Unit)? = null,
     onRayEndpointTapped: (() -> Unit)? = null,
     manualPosition: GeoPoint? = null,
+    contourEngine: com.example.data.elevation.ContourEngine? = null,
+    showContours: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val coroutineScope = rememberCoroutineScope()
@@ -323,6 +325,19 @@ fun TacticalMapView(
             onRequestTile = requestTile
         )
 
+        // 1b. Draw Topographical Contour Lines (Isohypses) from SRTM Elevation Data
+        if (showContours && contourEngine != null && zoom >= 10.5) {
+            drawContours(
+                center = center,
+                zoom = zoom,
+                width = width,
+                height = height,
+                contourEngine = contourEngine,
+                tileSource = tileSource,
+                cache = renderCache
+            )
+        }
+
         // 2. Draw Military Grid Overlay
         drawMilitaryGrid(center, zoom, width, height, renderCache)
 
@@ -457,6 +472,91 @@ private fun DrawScope.drawTiles(
                     null
                 )
                 onRequestTile(tileSource, tile)
+            }
+        }
+    }
+}
+
+private fun DrawScope.drawContours(
+    center: GeoPoint,
+    zoom: Double,
+    width: Float,
+    height: Float,
+    contourEngine: com.example.data.elevation.ContourEngine,
+    tileSource: TileSource,
+    cache: TacticalMapRenderCache
+) {
+    val intZoom = zoom.toInt().coerceIn(tileSource.minZoom, tileSource.maxZoom)
+    val scale = 2.0.pow(zoom - intZoom).toFloat()
+
+    val centerWorldX = MapProjection.lonToWorldX(center.longitude, intZoom.toDouble())
+    val centerWorldY = MapProjection.latToWorldY(center.latitude, intZoom.toDouble())
+
+    val halfW = (width / 2f) / scale
+    val halfH = (height / 2f) / scale
+
+    val minWorldX = centerWorldX - halfW
+    val maxWorldX = centerWorldX + halfW
+    val minWorldY = centerWorldY - halfH
+    val maxWorldY = centerWorldY + halfH
+
+    val minTileX = (minWorldX / 256.0).toInt().coerceAtLeast(0)
+    val maxTileX = (maxWorldX / 256.0).toInt().coerceAtMost((2.0.pow(intZoom) - 1).toInt())
+    val minTileY = (minWorldY / 256.0).toInt().coerceAtLeast(0)
+    val maxTileY = (maxWorldY / 256.0).toInt().coerceAtMost((2.0.pow(intZoom) - 1).toInt())
+
+    val maxTiles = 2.0.pow(intZoom).toInt()
+
+    val minorColor = Color(0x999C640C) // Tactical amber-brown
+    val indexColor = Color(0xCC6D3800) // Darker index amber-brown
+
+    for (tx in minTileX..maxTileX) {
+        val wrappedTx = (tx % maxTiles + maxTiles) % maxTiles
+        for (ty in minTileY..maxTileY) {
+            val tile = TileCoordinate(wrappedTx, ty, intZoom)
+            val contourTile = contourEngine.getContourTile(tile)
+            if (contourTile.segments.isEmpty()) continue
+
+            for (seg in contourTile.segments) {
+                val (sx1, sy1) = MapProjection.geoToScreen(seg.p1, center.latitude, center.longitude, zoom, width, height)
+                val (sx2, sy2) = MapProjection.geoToScreen(seg.p2, center.latitude, center.longitude, zoom, width, height)
+
+                // Quick boundary culling
+                if ((sx1 < -50f && sx2 < -50f) || (sx1 > width + 50f && sx2 > width + 50f) ||
+                    (sy1 < -50f && sy2 < -50f) || (sy1 > height + 50f && sy2 > height + 50f)) {
+                    continue
+                }
+
+                if (seg.isIndex) {
+                    drawLine(
+                        color = indexColor,
+                        start = Offset(sx1, sy1),
+                        end = Offset(sx2, sy2),
+                        strokeWidth = 2.0f * scale.coerceIn(0.8f, 1.4f)
+                    )
+
+                    // Draw elevation label occasionally along index contours
+                    val segLenSq = (sx2 - sx1) * (sx2 - sx1) + (sy2 - sy1) * (sy2 - sy1)
+                    if (segLenSq > 400f && (sx1.toInt() % 120 < 15)) {
+                        val midX = (sx1 + sx2) / 2f
+                        val midY = (sy1 + sy2) / 2f
+                        if (midX in 20f..(width - 20f) && midY in 20f..(height - 20f)) {
+                            drawContext.canvas.nativeCanvas.drawText(
+                                "${seg.elevation.toInt()}m",
+                                midX,
+                                midY - 4f,
+                                cache.contourTextPaint
+                            )
+                        }
+                    }
+                } else {
+                    drawLine(
+                        color = minorColor,
+                        start = Offset(sx1, sy1),
+                        end = Offset(sx2, sy2),
+                        strokeWidth = 1.0f * scale.coerceIn(0.8f, 1.4f)
+                    )
+                }
             }
         }
     }
