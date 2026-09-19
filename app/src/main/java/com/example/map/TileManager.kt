@@ -36,7 +36,9 @@ class TileManager(private val context: Context) {
     private val fallbackCache = LruCache<String, Bitmap>(64)
 
     // Strictly serialize vector tile parsing and rasterization to 1 thread to prevent native memory / heap spikes
-    private val vectorParseDispatcher = Dispatchers.IO.limitedParallelism(1)
+    private val mvtParseDispatcher = Dispatchers.IO.limitedParallelism(1)
+    // GeoPackage vector rasterization: 2 threads (RGB_565 and bounded cache allow controlled concurrency)
+    private val gpkgRenderDispatcher = Dispatchers.IO.limitedParallelism(2)
 
     companion object {
         /**
@@ -222,11 +224,15 @@ class TileManager(private val context: Context) {
         // 1. Fast Memory Cache lookup (no coroutine context switch)
         memoryCache.get(cacheKey)?.let { return it }
 
-        val isVector = (source as? MbtilesTileSource)?.metadata?.isVector == true ||
-            (source.id == activeMbtilesSource?.id && activeMbtilesSource?.metadata?.isVector == true) ||
-            source is GeoPackageTileSource || (source.id == activeGpkgSource?.id)
+        val isGpkg = source is GeoPackageTileSource || (source.id == activeGpkgSource?.id)
+        val isMvt = (source as? MbtilesTileSource)?.metadata?.isVector == true ||
+            (source.id == activeMbtilesSource?.id && activeMbtilesSource?.metadata?.isVector == true)
 
-        val dispatcher = if (isVector) vectorParseDispatcher else Dispatchers.IO
+        val dispatcher = when {
+            isGpkg -> gpkgRenderDispatcher
+            isMvt -> mvtParseDispatcher
+            else -> Dispatchers.IO
+        }
 
         return withContext(dispatcher) {
             // Re-check memory cache after acquiring thread
