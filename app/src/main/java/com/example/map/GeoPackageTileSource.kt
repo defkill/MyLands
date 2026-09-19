@@ -119,7 +119,7 @@ class GeoPackageTileSource(
         bounds: GeoBoundingBox,
         zoom: Int
     ) {
-        val fids = GeoPackageIndexer.querySpatialIndex(
+        val segments = GeoPackageIndexer.querySpatialSegments(
             iDb,
             layerName,
             bounds.minLon,
@@ -127,26 +127,29 @@ class GeoPackageTileSource(
             bounds.minLat,
             bounds.maxLat
         )
-        if (fids.isEmpty()) return
+        if (segments.isEmpty()) return
 
         // Batch query feature data
         val features = mutableListOf<GeoFeature>()
-        val uncachedFids = mutableListOf<Long>()
-        for (fid in fids) {
-            val cacheKey = "$layerName:$fid"
+        val uncachedSegments = mutableListOf<com.example.map.vector.SpatialSegment>()
+        for (seg in segments) {
+            val cacheKey = if (seg.pointEnd >= 0) "$layerName:${seg.fid}:${seg.pointStart}:${seg.pointEnd}" else "$layerName:${seg.fid}"
             val cached = featureCache.get(cacheKey)
             if (cached != null) {
                 if (GeoPackageStyle.isFeatureVisibleAtZoom(layerName, cached.attributes, zoom)) {
                     features.add(cached)
                 }
             } else {
-                uncachedFids.add(fid)
+                uncachedSegments.add(seg)
             }
         }
 
-        if (uncachedFids.isNotEmpty()) {
+        if (uncachedSegments.isNotEmpty()) {
             val zoomFilter = GeoPackageStyle.sqlVisibilityFilter(layerName, zoom)
-            uncachedFids.chunked(500).forEach { chunk ->
+            val segmentsByFid = uncachedSegments.groupBy { it.fid }
+            val uniqueFids = segmentsByFid.keys.toList()
+
+            uniqueFids.chunked(500).forEach { chunk ->
                 val placeholders = chunk.joinToString(",") { "?" }
                 val whereClause = if (zoomFilter != null) {
                     "rowid IN ($placeholders) AND ${zoomFilter.first}"
@@ -167,11 +170,26 @@ class GeoPackageTileSource(
                             val attrs = mapOf("fclass" to fclass, "name" to name)
 
                             if (geomBytes != null) {
-                                val parsed = GeoPackageGeometryParser.parse(fid, geomBytes, attrs)
-                                if (parsed != null) {
-                                    featureCache.put("$layerName:$fid", parsed)
-                                    if (GeoPackageStyle.isFeatureVisibleAtZoom(layerName, attrs, zoom)) {
-                                        features.add(parsed)
+                                val targetSegments = segmentsByFid[fid] ?: emptyList()
+                                for (seg in targetSegments) {
+                                    val parsed = if (seg.pointEnd >= 0) {
+                                        GeoPackageGeometryParser.parsePointRange(
+                                            fid = fid,
+                                            geomBytes = geomBytes,
+                                            pointStart = seg.pointStart,
+                                            pointEnd = seg.pointEnd,
+                                            attributes = attrs
+                                        )
+                                    } else {
+                                        GeoPackageGeometryParser.parse(fid, geomBytes, attrs)
+                                    }
+
+                                    if (parsed != null) {
+                                        val key = if (seg.pointEnd >= 0) "$layerName:$fid:${seg.pointStart}:${seg.pointEnd}" else "$layerName:$fid"
+                                        featureCache.put(key, parsed)
+                                        if (GeoPackageStyle.isFeatureVisibleAtZoom(layerName, attrs, zoom)) {
+                                            features.add(parsed)
+                                        }
                                     }
                                 }
                             }
@@ -183,13 +201,16 @@ class GeoPackageTileSource(
 
         if (features.isEmpty()) return
 
-        // Draw Polygons
+        // Draw Polygons (batched by fclass to minimize draw calls)
         if (layerName.endsWith("_a_free")) {
-            for (f in features) {
-                if (f.geometryType == "POLYGON" || f.geometryType == "MULTIPOLYGON") {
-                    val fclass = (f.attributes["fclass"] as? String) ?: ""
-                    val paint = GeoPackageStyle.getPolygonPaint(layerName, fclass)
-                    val path = Path()
+            val polygonsByFclass = features
+                .filter { it.geometryType == "POLYGON" || it.geometryType == "MULTIPOLYGON" }
+                .groupBy { (it.attributes["fclass"] as? String) ?: "" }
+
+            for ((fclass, fList) in polygonsByFclass) {
+                val paint = GeoPackageStyle.getPolygonPaint(layerName, fclass)
+                val path = Path()
+                for (f in fList) {
                     for (ring in f.rings) {
                         if (ring.isEmpty()) continue
                         var first = true
@@ -205,48 +226,80 @@ class GeoPackageTileSource(
                         }
                         path.close()
                     }
-                    canvas.drawPath(path, paint)
                 }
+                canvas.drawPath(path, paint)
             }
         }
 
-        // Draw Lines (Casing first if road, then main stroke)
-        if (layerName == "gis_osm_roads_free") {
-            for (f in features) {
-                if (f.geometryType == "LINESTRING" || f.geometryType == "MULTILINESTRING") {
-                    val fclass = (f.attributes["fclass"] as? String) ?: ""
+        // Draw Lines (batched by fclass)
+        val lineFeatures = features.filter { it.geometryType == "LINESTRING" || it.geometryType == "MULTILINESTRING" }
+        if (lineFeatures.isNotEmpty()) {
+            val linesByFclass = lineFeatures.groupBy { (it.attributes["fclass"] as? String) ?: "" }
+
+            // Road casing first
+            if (layerName == "gis_osm_roads_free") {
+                for ((fclass, fList) in linesByFclass) {
                     val casingPaint = GeoPackageStyle.getLinePaint(layerName, fclass, zoom, isCasing = true)
-                    drawLines(canvas, f, bounds, casingPaint)
+                    val casingPath = Path()
+                    buildLinesPath(casingPath, fList, bounds)
+                    canvas.drawPath(casingPath, casingPaint)
                 }
+            }
+
+            // Main stroke
+            for ((fclass, fList) in linesByFclass) {
+                val paint = GeoPackageStyle.getLinePaint(layerName, fclass, zoom, isCasing = false)
+                val path = Path()
+                buildLinesPath(path, fList, bounds)
+                canvas.drawPath(path, paint)
             }
         }
 
-        for (f in features) {
-            if (f.geometryType == "LINESTRING" || f.geometryType == "MULTILINESTRING") {
+        // Draw Points (POIs and Places)
+        val pointFeatures = features.filter { it.geometryType == "POINT" || it.geometryType == "MULTIPOINT" }
+        if (pointFeatures.isNotEmpty()) {
+            for (f in pointFeatures) {
                 val fclass = (f.attributes["fclass"] as? String) ?: ""
-                val paint = GeoPackageStyle.getLinePaint(layerName, fclass, zoom, isCasing = false)
-                drawLines(canvas, f, bounds, paint)
+                val name = (f.attributes["name"] as? String) ?: ""
+                val paint = GeoPackageStyle.getPointPaint(layerName, fclass)
+
+                for (ring in f.rings) {
+                    for (pt in ring) {
+                        val px = lonToPixel(pt.lon, bounds.minLon, bounds.maxLon)
+                        val py = latToPixel(pt.lat, bounds.minLat, bounds.maxLat)
+                        val radius = if (layerName == "gis_osm_places_free") 4f else 3f
+                        canvas.drawCircle(px, py, radius, paint)
+
+                        if (name.isNotBlank() && zoom >= 11) {
+                            val fontSize = if (layerName == "gis_osm_places_free") 12f else 10f
+                            val haloPaint = GeoPackageStyle.getTextPaint(fontSize, isHalo = true)
+                            val textPaint = GeoPackageStyle.getTextPaint(fontSize, isHalo = false)
+                            canvas.drawText(name, px, py - radius - 3f, haloPaint)
+                            canvas.drawText(name, px, py - radius - 3f, textPaint)
+                        }
+                    }
+                }
             }
         }
     }
 
-    private fun drawLines(canvas: Canvas, feature: GeoFeature, bounds: GeoBoundingBox, paint: android.graphics.Paint) {
-        val path = Path()
-        for (line in feature.rings) {
-            if (line.size < 2) continue
-            var first = true
-            for (pt in line) {
-                val px = lonToPixel(pt.lon, bounds.minLon, bounds.maxLon)
-                val py = latToPixel(pt.lat, bounds.minLat, bounds.maxLat)
-                if (first) {
-                    path.moveTo(px, py)
-                    first = false
-                } else {
-                    path.lineTo(px, py)
+    private fun buildLinesPath(path: Path, features: List<GeoFeature>, bounds: GeoBoundingBox) {
+        for (f in features) {
+            for (line in f.rings) {
+                if (line.size < 2) continue
+                var first = true
+                for (pt in line) {
+                    val px = lonToPixel(pt.lon, bounds.minLon, bounds.maxLon)
+                    val py = latToPixel(pt.lat, bounds.minLat, bounds.maxLat)
+                    if (first) {
+                        path.moveTo(px, py)
+                        first = false
+                    } else {
+                        path.lineTo(px, py)
+                    }
                 }
             }
         }
-        canvas.drawPath(path, paint)
     }
 
     private fun lonToPixel(lon: Double, minLon: Double, maxLon: Double): Float {

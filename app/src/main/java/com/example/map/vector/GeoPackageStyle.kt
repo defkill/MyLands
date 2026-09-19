@@ -182,8 +182,47 @@ object GeoPackageStyle {
     val COLOR_ROAD_PATH = Color.rgb(150, 100, 80)
     val COLOR_ROAD_CASING = Color.rgb(200, 195, 185)
 
+    val COLOR_POI_DEFAULT = Color.rgb(80, 120, 180)
+    val COLOR_POI_MEDICAL = Color.rgb(210, 40, 40)
+    val COLOR_TEXT = Color.rgb(45, 50, 55)
+    val COLOR_TEXT_HALO = Color.rgb(255, 255, 255)
+
     private val polygonPaintCache = mutableMapOf<String, Paint>()
     private val linePaintCache = mutableMapOf<String, Paint>()
+    private val pointPaintCache = mutableMapOf<String, Paint>()
+    private val textPaintCache = mutableMapOf<String, Paint>()
+
+    fun getPointPaint(layerName: String, fclass: String): Paint {
+        val key = "$layerName:$fclass"
+        return pointPaintCache.getOrPut(key) {
+            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.FILL
+                color = when (fclass) {
+                    "hospital", "pharmacy" -> COLOR_POI_MEDICAL
+                    "police", "fire_station" -> Color.rgb(220, 100, 30)
+                    else -> COLOR_POI_DEFAULT
+                }
+            }
+        }
+    }
+
+    fun getTextPaint(fontSize: Float, isHalo: Boolean = false): Paint {
+        val key = "$fontSize:$isHalo"
+        return textPaintCache.getOrPut(key) {
+            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                textSize = fontSize
+                textAlign = Paint.Align.CENTER
+                if (isHalo) {
+                    style = Paint.Style.STROKE
+                    strokeWidth = 3f
+                    color = COLOR_TEXT_HALO
+                } else {
+                    style = Paint.Style.FILL
+                    color = COLOR_TEXT
+                }
+            }
+        }
+    }
 
     private fun resolvePolygonColor(layerName: String, fclass: String): Int {
         return when (layerName) {

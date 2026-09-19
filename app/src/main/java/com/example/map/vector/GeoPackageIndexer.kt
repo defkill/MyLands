@@ -6,11 +6,19 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 
+data class SpatialSegment(
+    val segmentId: Long,
+    val fid: Long,
+    val pointStart: Int = 0,
+    val pointEnd: Int = -1
+)
+
 /**
  * Builds a dedicated SQLite R-Tree spatial index for GeoPackage feature layers.
  *
  * Runs once upon file import, creating a lightweight sidecar database
- * `<filename>.spatialindex` containing `rtree_<layer_name>` virtual tables.
+ * `<filename>.spatialindex` containing `rtree_<layer_name>` virtual tables and
+ * `segments_<layer_name>` mapping tables for segmented linestrings.
  * This turns spatial viewport queries from O(N) full-table scans into O(log N) indexed lookups.
  */
 object GeoPackageIndexer {
@@ -95,6 +103,17 @@ object GeoPackageIndexer {
                     indexDb.execSQL("CREATE INDEX IF NOT EXISTS idx_${layerName}_spatial ON btree_$layerName(minX, maxX, minY, maxY)")
                 }
 
+                indexDb.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS segments_$layerName (
+                        segment_id INTEGER PRIMARY KEY,
+                        fid INTEGER,
+                        point_start INTEGER,
+                        point_end INTEGER
+                    )
+                    """.trimIndent()
+                )
+
                 var layerTotal = 0
                 try {
                     sourceDb.rawQuery("SELECT COUNT(*) FROM \"$layerName\"", null).use { c ->
@@ -103,6 +122,7 @@ object GeoPackageIndexer {
                 } catch (_: Exception) {}
 
                 var processedCount = 0
+                var segmentCounter = 1L
                 indexDb.beginTransaction()
                 try {
                     val insertSql = if (useRtree) {
@@ -111,6 +131,8 @@ object GeoPackageIndexer {
                         "INSERT OR REPLACE INTO btree_$layerName (id, minX, maxX, minY, maxY) VALUES (?, ?, ?, ?, ?)"
                     }
                     val insertStmt = indexDb.compileStatement(insertSql)
+                    val insertSegSql = "INSERT OR REPLACE INTO segments_$layerName (segment_id, fid, point_start, point_end) VALUES (?, ?, ?, ?)"
+                    val insertSegStmt = indexDb.compileStatement(insertSegSql)
 
                     sourceDb.rawQuery("SELECT rowid, \"$geomCol\" FROM \"$layerName\"", null).use { cursor ->
                         while (cursor.moveToNext()) {
@@ -119,14 +141,21 @@ object GeoPackageIndexer {
                             if (geomBytes != null && geomBytes.size >= 8) {
                                 val bboxes = GeoPackageGeometryParser.extractSegmentedBoundingBoxes(geomBytes, maxPointsPerSegment = 50)
                                 for (item in bboxes) {
-                                    val rtreeId = (fid shl 16) or (item.segmentIndex.toLong() and 0xFFFFL)
-                                    insertStmt.bindLong(1, rtreeId)
+                                    val segId = segmentCounter++
+                                    insertStmt.bindLong(1, segId)
                                     insertStmt.bindDouble(2, item.bbox.minX)
                                     insertStmt.bindDouble(3, item.bbox.maxX)
                                     insertStmt.bindDouble(4, item.bbox.minY)
                                     insertStmt.bindDouble(5, item.bbox.maxY)
                                     insertStmt.executeInsert()
                                     insertStmt.clearBindings()
+
+                                    insertSegStmt.bindLong(1, segId)
+                                    insertSegStmt.bindLong(2, fid)
+                                    insertSegStmt.bindLong(3, item.pointStart.toLong())
+                                    insertSegStmt.bindLong(4, item.pointEnd.toLong())
+                                    insertSegStmt.executeInsert()
+                                    insertSegStmt.clearBindings()
                                 }
                             }
 
@@ -141,6 +170,7 @@ object GeoPackageIndexer {
                     }
 
                     insertStmt.close()
+                    insertSegStmt.close()
                     indexDb.setTransactionSuccessful()
                 } finally {
                     indexDb.endTransaction()
@@ -165,7 +195,7 @@ object GeoPackageIndexer {
             }
 
             indexDb.execSQL("INSERT OR REPLACE INTO index_metadata (key, value) VALUES ('has_btree_fallback', ?)", arrayOf(anyBtreeFallback.toString()))
-            indexDb.execSQL("INSERT OR REPLACE INTO index_metadata (key, value) VALUES ('version', '2')")
+            indexDb.execSQL("INSERT OR REPLACE INTO index_metadata (key, value) VALUES ('version', '3')")
             indexDb.execSQL("INSERT OR REPLACE INTO index_metadata (key, value) VALUES ('source_file', ?)", arrayOf(sourceGpkg.name))
 
             Log.i(TAG, "Spatial index built successfully: ${indexFile.absolutePath} (${indexFile.length()} bytes)")
@@ -182,7 +212,69 @@ object GeoPackageIndexer {
     }
 
     /**
-     * Spatial bounding box query that automatically supports both R-Tree and B-Tree spatial tables.
+     * Queries spatial segments intersecting the bounding box with exact pointStart / pointEnd limits.
+     */
+    fun querySpatialSegments(
+        indexDb: SQLiteDatabase,
+        layerName: String,
+        minX: Double,
+        maxX: Double,
+        minY: Double,
+        maxY: Double
+    ): List<SpatialSegment> {
+        val result = mutableListOf<SpatialSegment>()
+        val rtreeSql = """
+            SELECT s.segment_id, s.fid, s.point_start, s.point_end
+            FROM rtree_$layerName r
+            JOIN segments_$layerName s ON r.id = s.segment_id
+            WHERE r.minX <= ? AND r.maxX >= ? AND r.minY <= ? AND r.maxY >= ?
+        """.trimIndent()
+        val btreeSql = """
+            SELECT s.segment_id, s.fid, s.point_start, s.point_end
+            FROM btree_$layerName r
+            JOIN segments_$layerName s ON r.id = s.segment_id
+            WHERE r.minX <= ? AND r.maxX >= ? AND r.minY <= ? AND r.maxY >= ?
+        """.trimIndent()
+
+        try {
+            indexDb.rawQuery(rtreeSql, arrayOf(maxX.toString(), minX.toString(), maxY.toString(), minY.toString())).use { cursor ->
+                while (cursor.moveToNext()) {
+                    result.add(
+                        SpatialSegment(
+                            segmentId = cursor.getLong(0),
+                            fid = cursor.getLong(1),
+                            pointStart = cursor.getInt(2),
+                            pointEnd = cursor.getInt(3)
+                        )
+                    )
+                }
+            }
+            return result
+        } catch (_: Exception) {}
+
+        try {
+            indexDb.rawQuery(btreeSql, arrayOf(maxX.toString(), minX.toString(), maxY.toString(), minY.toString())).use { cursor ->
+                while (cursor.moveToNext()) {
+                    result.add(
+                        SpatialSegment(
+                            segmentId = cursor.getLong(0),
+                            fid = cursor.getLong(1),
+                            pointStart = cursor.getInt(2),
+                            pointEnd = cursor.getInt(3)
+                        )
+                    )
+                }
+            }
+            return result
+        } catch (_: Exception) {}
+
+        // Fallback for legacy indexes without segments table
+        val fids = querySpatialIndex(indexDb, layerName, minX, maxX, minY, maxY)
+        return fids.map { fid -> SpatialSegment(segmentId = fid, fid = fid, pointStart = 0, pointEnd = -1) }
+    }
+
+    /**
+     * Spatial bounding box query that returns unique feature IDs.
      */
     fun querySpatialIndex(
         indexDb: SQLiteDatabase,
@@ -192,6 +284,16 @@ object GeoPackageIndexer {
         minY: Double,
         maxY: Double
     ): List<Long> {
+        val segments = querySpatialSegments(indexDb, layerName, minX, maxX, minY, maxY)
+        if (segments.isNotEmpty()) {
+            val fids = LinkedHashSet<Long>()
+            for (seg in segments) {
+                fids.add(seg.fid)
+            }
+            return fids.toList()
+        }
+
+        // Legacy direct query if segments query returned empty but index had raw IDs
         val result = LinkedHashSet<Long>()
         val rtreeSql = "SELECT id FROM rtree_$layerName WHERE minX <= ? AND maxX >= ? AND minY <= ? AND maxY >= ?"
         val btreeSql = "SELECT id FROM btree_$layerName WHERE minX <= ? AND maxX >= ? AND minY <= ? AND maxY >= ?"
@@ -205,9 +307,7 @@ object GeoPackageIndexer {
                 }
             }
             return result.toList()
-        } catch (_: Exception) {
-            // RTree table did not exist, fallback to BTree table
-        }
+        } catch (_: Exception) {}
 
         try {
             indexDb.rawQuery(btreeSql, arrayOf(maxX.toString(), minX.toString(), maxY.toString(), minY.toString())).use { cursor ->

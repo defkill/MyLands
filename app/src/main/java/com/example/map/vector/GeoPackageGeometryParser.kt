@@ -17,7 +17,9 @@ data class DoublePoint(
 
 data class IndexedBoundingBox(
     val segmentIndex: Int,
-    val bbox: GeoBoundingBox
+    val bbox: GeoBoundingBox,
+    val pointStart: Int = 0,
+    val pointEnd: Int = -1
 )
 
 data class GeoFeature(
@@ -89,21 +91,27 @@ object GeoPackageGeometryParser {
                 2 -> { // LINESTRING
                     val numPoints = buffer.int
                     if (numPoints <= 0 || buffer.remaining() < numPoints * 16) return emptyList()
+
                     if (numPoints <= maxPointsPerSegment) {
                         val bbox = computePointsBbox(buffer, numPoints)
-                        return if (bbox != null) listOf(IndexedBoundingBox(0, bbox)) else emptyList()
+                        return if (bbox != null) listOf(IndexedBoundingBox(0, bbox, 0, -1)) else emptyList()
                     } else {
                         val points = ArrayList<DoublePoint>(numPoints)
                         for (i in 0 until numPoints) {
                             points.add(DoublePoint(buffer.double, buffer.double))
                         }
-                        val segments = segmentLongLinestring(points, maxPointsPerSegment)
-                        val result = ArrayList<IndexedBoundingBox>(segments.size)
-                        segments.forEachIndexed { idx, segPts ->
+                        val result = ArrayList<IndexedBoundingBox>()
+                        var segIdx = 0
+                        var start = 0
+                        while (start < numPoints) {
+                            val end = (start + maxPointsPerSegment - 1).coerceAtMost(numPoints - 1)
+                            val segPts = points.subList(start, end + 1)
                             val bbox = computeBbox(segPts)
                             if (bbox != null) {
-                                result.add(IndexedBoundingBox(idx.coerceAtMost(0xFFFF), bbox))
+                                result.add(IndexedBoundingBox(segIdx++, bbox, start, end))
                             }
+                            if (end >= numPoints - 1) break
+                            start += (maxPointsPerSegment - 1)
                         }
                         return result
                     }
@@ -121,23 +129,9 @@ object GeoPackageGeometryParser {
                         if (subType == 2) {
                             val numPoints = buffer.int
                             if (numPoints > 0 && buffer.remaining() >= numPoints * 16) {
-                                if (numPoints <= maxPointsPerSegment) {
-                                    val bbox = computePointsBbox(buffer, numPoints)
-                                    if (bbox != null) {
-                                        result.add(IndexedBoundingBox((segCounter++).coerceAtMost(0xFFFF), bbox))
-                                    }
-                                } else {
-                                    val points = ArrayList<DoublePoint>(numPoints)
-                                    for (p in 0 until numPoints) {
-                                        points.add(DoublePoint(buffer.double, buffer.double))
-                                    }
-                                    val segments = segmentLongLinestring(points, maxPointsPerSegment)
-                                    for (segPts in segments) {
-                                        val bbox = computeBbox(segPts)
-                                        if (bbox != null) {
-                                            result.add(IndexedBoundingBox((segCounter++).coerceAtMost(0xFFFF), bbox))
-                                        }
-                                    }
+                                val bbox = computePointsBbox(buffer, numPoints)
+                                if (bbox != null) {
+                                    result.add(IndexedBoundingBox((segCounter++).coerceAtMost(0xFFFF), bbox, 0, -1))
                                 }
                             }
                         }
@@ -146,18 +140,90 @@ object GeoPackageGeometryParser {
                 }
                 else -> {
                     val bbox = extractBoundingBox(geomBytes)
-                    return if (bbox != null) listOf(IndexedBoundingBox(0, bbox)) else emptyList()
+                    return if (bbox != null) listOf(IndexedBoundingBox(0, bbox, 0, -1)) else emptyList()
                 }
             }
         } catch (_: Throwable) {
             val bbox = extractBoundingBox(geomBytes)
-            return if (bbox != null) listOf(IndexedBoundingBox(0, bbox)) else emptyList()
+            return if (bbox != null) listOf(IndexedBoundingBox(0, bbox, 0, -1)) else emptyList()
         }
     }
 
-    private fun segmentLongLinestring(points: List<DoublePoint>, maxPointsPerSegment: Int = 50): List<List<DoublePoint>> {
-        if (points.size <= maxPointsPerSegment) return listOf(points)
-        return points.windowed(maxPointsPerSegment, step = maxPointsPerSegment - 1, partialWindows = true)
+    /**
+     * Reads only the specified point range [pointStart..pointEnd] directly from WKB LINESTRING,
+     * skipping preceeding points without creating intermediate DoublePoint objects.
+     */
+    fun parsePointRange(
+        fid: Long,
+        geomBytes: ByteArray,
+        pointStart: Int,
+        pointEnd: Int,
+        attributes: Map<String, Any?> = emptyMap()
+    ): GeoFeature? {
+        if (geomBytes.size < 8) return null
+        if (geomBytes[0] != MAGIC_0 || geomBytes[1] != MAGIC_1) return null
+
+        val flags = geomBytes[3].toInt()
+        val isLittleEndian = (flags and 0x01) == 1
+        val envelopeIndicator = (flags and 0x0E) shr 1
+        val isEmpty = (flags and 0x10) != 0
+        if (isEmpty) return null
+
+        val wkbOffset = 8 + getEnvelopeByteLength(envelopeIndicator)
+        if (wkbOffset >= geomBytes.size) return null
+
+        try {
+            val buffer = ByteBuffer.wrap(geomBytes, wkbOffset, geomBytes.size - wkbOffset)
+            if (buffer.remaining() < 5) return null
+
+            val byteOrderByte = buffer.get()
+            val order = if (byteOrderByte.toInt() == 1) ByteOrder.LITTLE_ENDIAN else ByteOrder.BIG_ENDIAN
+            buffer.order(order)
+
+            val rawType = buffer.int
+            val baseType = rawType % 1000
+
+            if (baseType == 2) { // LINESTRING
+                val numPoints = buffer.int
+                if (numPoints <= 0 || pointStart >= numPoints) return null
+                val actualEnd = pointEnd.coerceAtMost(numPoints - 1)
+                if (actualEnd < pointStart) return null
+
+                val stride = when (rawType / 1000) {
+                    1, 2 -> 24
+                    3 -> 32
+                    else -> 16
+                }
+
+                if (buffer.remaining() < numPoints * stride) return null
+
+                val pointCount = actualEnd - pointStart + 1
+                // Jump straight to pointStart
+                val startPos = buffer.position() + pointStart * stride
+                buffer.position(startPos)
+
+                val points = ArrayList<DoublePoint>(pointCount)
+                for (i in 0 until pointCount) {
+                    val lon = buffer.double
+                    val lat = buffer.double
+                    if (stride > 16) {
+                        buffer.position(buffer.position() + (stride - 16))
+                    }
+                    points.add(DoublePoint(lon, lat))
+                }
+
+                return GeoFeature(
+                    fid = fid,
+                    geometryType = "LINESTRING",
+                    rings = listOf(points),
+                    attributes = attributes
+                )
+            } else {
+                return parse(fid, geomBytes, attributes)
+            }
+        } catch (_: Throwable) {
+            return null
+        }
     }
 
     private fun computePointsBbox(buffer: ByteBuffer, numPoints: Int): GeoBoundingBox? {

@@ -567,6 +567,11 @@ class TileManager(private val context: Context) {
                     entry.name.startsWith("cache/") -> baseCacheDir to entry.name.removePrefix("cache/")
                     entry.name.startsWith("maps/") -> File(context.filesDir, "maps") to entry.name.removePrefix("maps/")
                     entry.name.startsWith("packages/") -> File(context.filesDir, "packages") to entry.name.removePrefix("packages/")
+                    entry.name.startsWith("hgt/") -> File(context.filesDir, "hgt") to entry.name.removePrefix("hgt/")
+                    entry.name.endsWith(".png") || entry.name.endsWith(".jpg") -> baseCacheDir to entry.name
+                    entry.name.endsWith(".mbtiles") || entry.name.endsWith(".gpkg") || entry.name.endsWith(".pmtiles") || entry.name.endsWith(".spatialindex") -> File(context.filesDir, "maps") to File(entry.name).name
+                    entry.name.endsWith(".hgt") -> File(context.filesDir, "hgt") to File(entry.name).name
+                    entry.name.endsWith(".orntpack") -> File(context.filesDir, "packages") to File(entry.name).name
                     else -> continue // Unknown section - skip safely
                 }
 

@@ -205,42 +205,40 @@ fun DataExchangeDialog(
     ) { uri: Uri? ->
         if (uri != null) {
             val rawFileName = getFileName(context, uri)
-            MapBackupService.startImport(context, uri, rawFileName)
-            onDismiss()
-        }
-    }
+            when {
+                rawFileName.lowercase().endsWith(".zip") -> {
+                    coroutineScope.launch {
+                        try {
+                            val sourceSize = withContext(Dispatchers.IO) {
+                                context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { c ->
+                                    val idx = c.getColumnIndex(OpenableColumns.SIZE)
+                                    if (c.moveToFirst() && idx >= 0 && !c.isNull(idx)) c.getLong(idx) else -1L
+                                } ?: -1L
+                            }
+                            val freeBytes = context.filesDir.usableSpace
+                            if (sourceSize > 0 && freeBytes < sourceSize + (50L * 1024 * 1024)) {
+                                val needMb = sourceSize / (1024 * 1024)
+                                val freeMb = freeBytes / (1024 * 1024)
+                                Toast.makeText(
+                                    context,
+                                    "Недостаточно места: нужно ~$needMb МБ, свободно $freeMb МБ",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                                return@launch
+                            }
 
-    val restoreBackupLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri: Uri? ->
-        if (uri != null) {
-            coroutineScope.launch {
-                try {
-                    val sourceSize = withContext(Dispatchers.IO) {
-                        context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { c ->
-                            val idx = c.getColumnIndex(OpenableColumns.SIZE)
-                            if (c.moveToFirst() && idx >= 0 && !c.isNull(idx)) c.getLong(idx) else -1L
-                        } ?: -1L
+                            MapBackupService.startRestore(context, uri)
+                            Toast.makeText(context, "Восстановление карт запущено в фоне", Toast.LENGTH_SHORT).show()
+                        } catch (e: Exception) {
+                            Toast.makeText(context, "Ошибка запуска восстановления: ${e.localizedMessage ?: e.message}", Toast.LENGTH_LONG).show()
+                        }
                     }
-                    val freeBytes = context.filesDir.usableSpace
-                    if (sourceSize > 0 && freeBytes < sourceSize + (50L * 1024 * 1024)) {
-                        val needMb = sourceSize / (1024 * 1024)
-                        val freeMb = freeBytes / (1024 * 1024)
-                        Toast.makeText(
-                            context,
-                            "Недостаточно места: нужно ~$needMb МБ, свободно $freeMb МБ",
-                            Toast.LENGTH_LONG
-                        ).show()
-                        return@launch
-                    }
-
-                    // Start background foreground service for restore
-                    MapBackupService.startRestore(context, uri)
-                    Toast.makeText(context, "Восстановление карт запущено в фоне", Toast.LENGTH_SHORT).show()
-                } catch (e: Exception) {
-                    Toast.makeText(context, "Ошибка запуска восстановления: ${e.localizedMessage ?: e.message}", Toast.LENGTH_LONG).show()
+                }
+                else -> {
+                    MapBackupService.startImport(context, uri, rawFileName)
                 }
             }
+            onDismiss()
         }
     }
 
@@ -868,63 +866,19 @@ fun DataExchangeDialog(
 
                                         val backupFile = File(context.cacheDir, "maps_full_backup.zip")
                                         MapBackupService.startBackup(context, backupFile)
-                                        Toast.makeText(context, "Резервное копирование запущено в фоне", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, "Экспорт карт запущен в фоне", Toast.LENGTH_SHORT).show()
                                     } catch (e: Exception) {
-                                        Toast.makeText(context, "Ошибка резервного копирования: ${e.message}", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, "Ошибка экспорта карт: ${e.message}", Toast.LENGTH_SHORT).show()
                                     }
                                 }
                             },
                             enabled = !isProcessing && !isBackupServiceRunning,
-                            modifier = Modifier.fillMaxWidth().testTag("full_backup_button"),
+                            modifier = Modifier.fillMaxWidth().testTag("export_maps_button"),
                             colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
                         ) {
                             Icon(Icons.Default.Backup, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color(0xFF4FC3F7))
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Полная резервная копия карт")
-                        }
-
-                        OutlinedButton(
-                            onClick = {
-                                restoreBackupLauncher.launch(arrayOf("application/zip", "application/octet-stream", "*/*"))
-                            },
-                            enabled = !isProcessing && !isBackupServiceRunning,
-                            modifier = Modifier.fillMaxWidth().testTag("restore_backup_button"),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
-                        ) {
-                            Icon(Icons.Default.SettingsBackupRestore, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color(0xFF4FC3F7))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Восстановить из резервной копии")
-                        }
-
-                        OutlinedButton(
-                            onClick = {
-                                coroutineScope.launch {
-                                    isProcessing = true
-                                    try {
-                                        val exportsDir = File(context.cacheDir, "exports").apply { mkdirs() }
-                                        val packFile = File(exportsDir, "tactical_map_region.orntpack")
-                                        val count = viewModel.packCurrentCache(packFile)
-                                        if (count > 0) {
-                                            pendingSaveFile = packFile
-                                            val stamp = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US)
-                                                .format(java.util.Date())
-                                            saveMapLauncher.launch("maps_$stamp.orntpack")
-                                        } else {
-                                            Toast.makeText(context, "Карт пока нет. Просмотрите нужный регион онлайн перед упаковкой.", Toast.LENGTH_LONG).show()
-                                        }
-                                    } catch (e: Exception) {
-                                        Toast.makeText(context, "Ошибка упаковки: ${e.message}", Toast.LENGTH_SHORT).show()
-                                    } finally {
-                                        isProcessing = false
-                                    }
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth().testTag("save_orntpack_button"),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
-                        ) {
-                            Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color(0xFF81C784))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Сохранить все карты в файл")
+                            Text("Экспортировать карты")
                         }
 
                         OutlinedButton(

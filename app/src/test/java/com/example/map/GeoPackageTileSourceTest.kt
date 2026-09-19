@@ -4,6 +4,7 @@ import android.database.sqlite.SQLiteDatabase
 import android.graphics.Bitmap
 import com.example.map.vector.DoublePoint
 import com.example.map.vector.GeoBoundingBox
+import com.example.map.vector.GeoPackageGeometryParser
 import com.example.map.vector.GeoPackageIndexer
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
@@ -141,6 +142,13 @@ class GeoPackageTileSourceTest {
     @Test
     fun testSegmentation_PreventsFalsePositiveHitsInCorners() = runBlocking {
         val gpkgFile = File(testDir, "long_diagonal_road.gpkg")
+        // Diagonal road with 150 points from (1.0, 42.0) to (2.0, 43.0)
+        val points = (0..150).map { i ->
+            val frac = i / 150.0
+            DoublePoint(1.0 + frac * 1.0, 42.0 + frac * 1.0)
+        }
+        val roadBlob = createGpkgGeometryBlob(2, listOf(points))
+
         val db = SQLiteDatabase.openOrCreateDatabase(gpkgFile, null)
         try {
             db.execSQL("CREATE TABLE gpkg_contents (table_name TEXT, data_type TEXT, identifier TEXT)")
@@ -150,13 +158,6 @@ class GeoPackageTileSourceTest {
             db.execSQL("INSERT INTO gpkg_geometry_columns VALUES ('gis_osm_roads_free', 'geom', 'LINESTRING', 4326, 0, 0)")
 
             db.execSQL("CREATE TABLE gis_osm_roads_free (fid INTEGER PRIMARY KEY, geom BLOB, fclass TEXT, name TEXT)")
-
-            // Diagonal road with 150 points from (1.0, 42.0) to (2.0, 43.0)
-            val points = (0..150).map { i ->
-                val frac = i / 150.0
-                DoublePoint(1.0 + frac * 1.0, 42.0 + frac * 1.0)
-            }
-            val roadBlob = createGpkgGeometryBlob(2, listOf(points))
             db.execSQL("INSERT INTO gis_osm_roads_free (fid, geom, fclass, name) VALUES (10, ?, 'motorway', 'M06 Highway')", arrayOf(roadBlob))
         } finally {
             db.close()
@@ -171,6 +172,25 @@ class GeoPackageTileSourceTest {
                 minX = 1.04, maxX = 1.06, minY = 42.04, maxY = 42.06
             )
             assertEquals(listOf(10L), hitOnLine)
+
+            // Segment query should return segment with point range
+            val segments = GeoPackageIndexer.querySpatialSegments(
+                indexDb, "gis_osm_roads_free",
+                minX = 1.04, maxX = 1.06, minY = 42.04, maxY = 42.06
+            )
+            assertEquals(1, segments.size)
+            assertEquals(10L, segments[0].fid)
+            assertEquals(0, segments[0].pointStart)
+            assertEquals(49, segments[0].pointEnd)
+
+            val parsedSegment = GeoPackageGeometryParser.parsePointRange(
+                fid = 10L,
+                geomBytes = roadBlob,
+                pointStart = segments[0].pointStart,
+                pointEnd = segments[0].pointEnd
+            )
+            assertNotNull(parsedSegment)
+            assertEquals(50, parsedSegment?.rings?.firstOrNull()?.size)
 
             // 2. Box in opposite corner (1.05, 42.95) -> Inside overall bbox [1.0..2.0, 42.0..43.0]
             // BUT far from the diagonal road! With segmentation, this corner tile has NO segments and returns EMPTY.
