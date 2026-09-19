@@ -13,6 +13,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.MergeType
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -134,6 +135,27 @@ fun DataExchangeDialog(
                     if (!sourcesToDelete.isNullOrEmpty()) {
                         showPostMergeDeleteDialog = true
                     }
+                } else if (result.type == MapBackupService.OperationType.Import) {
+                    viewModel.restoreSavedOfflineMaps()
+                    if (result.outputFile != null) {
+                        val fileName = result.outputFile.name.lowercase()
+                        if (fileName.endsWith(".mbtiles")) {
+                            val attached = viewModel.attachMbtilesFile(result.outputFile)
+                            if (attached != null) {
+                                viewModel.setTileSource(attached)
+                            }
+                        } else if (fileName.endsWith(".gpkg")) {
+                            val attached = viewModel.attachGpkgFile(result.outputFile)
+                            if (attached != null) {
+                                viewModel.setTileSource(attached)
+                            }
+                        }
+                    }
+                    Toast.makeText(
+                        context,
+                        "Карта '${result.outputFile?.name ?: "тайлов"}' успешно импортирована!",
+                        Toast.LENGTH_LONG
+                    ).show()
                 }
             } else {
                 val msg = result.error ?: "Операция не выполнена"
@@ -182,162 +204,9 @@ fun DataExchangeDialog(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         if (uri != null) {
-            coroutineScope.launch {
-                isProcessing = true
-                copyProgress = 0f
-                copyStatusText = "Подготовка к импорту..."
-                var targetFileRef: File? = null
-                try {
-                    val rawFileName = getFileName(context, uri)
-                    val isMbtiles = rawFileName.lowercase().endsWith(".mbtiles")
-                    val isGpkg = rawFileName.lowercase().endsWith(".gpkg")
-                    val isDirectMap = isMbtiles || isGpkg
-                    val safeFileName = sanitizeFileName(
-                        rawFileName,
-                        if (isMbtiles) "map.mbtiles" else if (isGpkg) "map.gpkg" else "offline.orntpack"
-                    )
-                    val targetDir = if (isDirectMap) {
-                        File(context.filesDir, "maps").apply { mkdirs() }
-                    } else {
-                        File(context.filesDir, "packages").apply { mkdirs() }
-                    }
-                    val targetFile = File(targetDir, safeFileName)
-                    targetFileRef = targetFile
-
-                    if (!targetFile.canonicalPath.startsWith(targetDir.canonicalPath + File.separator)) {
-                        throw SecurityException("Небезопасный путь к файлу: $rawFileName")
-                    }
-
-                    // 1. Check source size and available disk space
-                    val sourceSize = withContext(Dispatchers.IO) {
-                        context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { c ->
-                            val idx = c.getColumnIndex(OpenableColumns.SIZE)
-                            if (c.moveToFirst() && idx >= 0 && !c.isNull(idx)) c.getLong(idx) else -1L
-                        } ?: -1L
-                    }
-
-                    val freeBytes = targetDir.usableSpace
-                    if (sourceSize > 0 && freeBytes < sourceSize + (100L * 1024 * 1024)) {
-                        val needMb = sourceSize / (1024 * 1024)
-                        val freeMb = freeBytes / (1024 * 1024)
-                        Toast.makeText(
-                            context,
-                            "Недостаточно места: нужно ~$needMb МБ, свободно $freeMb МБ",
-                            Toast.LENGTH_LONG
-                        ).show()
-                        isProcessing = false
-                        copyProgress = 0f
-                        copyStatusText = null
-                        return@launch
-                    }
-
-                    // 2. Stream copy on IO thread with progress reporting
-                    withContext(Dispatchers.IO) {
-                        context.contentResolver.openInputStream(uri)?.use { input ->
-                            FileOutputStream(targetFile).use { output ->
-                                val buffer = ByteArray(1 shl 20) // 1 MB buffer
-                                var copied = 0L
-                                while (true) {
-                                    val read = input.read(buffer)
-                                    if (read <= 0) break
-                                    output.write(buffer, 0, read)
-                                    copied += read
-                                    if (sourceSize > 0) {
-                                        val p = (copied.toFloat() / sourceSize).coerceIn(0f, 1f)
-                                        val copiedMb = copied / (1024 * 1024)
-                                        val totalMb = sourceSize / (1024 * 1024)
-                                        withContext(Dispatchers.Main) {
-                                            copyProgress = p
-                                            copyStatusText = "Копирование: $copiedMb из $totalMb МБ (${(p * 100).toInt()}%)"
-                                        }
-                                    }
-                                }
-                            }
-                        } ?: throw java.io.IOException("Не удалось открыть выбранный файл")
-                    }
-
-                    copyStatusText = "Анализ формата карты..."
-                    val format = withContext(Dispatchers.IO) {
-                        com.example.map.OfflineMapDetector.detectFromFile(targetFile)
-                    }
-
-                    if (format == OfflineMapFormat.MBTILES) {
-                        copyStatusText = "Подключение MBTiles базы данных..."
-                        val source = withContext(Dispatchers.IO) {
-                            viewModel.attachMbtilesFile(targetFile)
-                        }
-                        if (source != null) {
-                            val typeLabel = if (source.metadata.isVector) "векторная" else "растровая"
-                            Toast.makeText(
-                                context,
-                                "Карта MBTiles '${source.name}' ($typeLabel) подключена!",
-                                Toast.LENGTH_LONG
-                            ).show()
-                            onDismiss()
-                        } else {
-                            Toast.makeText(context, "Не удалось открыть MBTiles базу данных", Toast.LENGTH_LONG).show()
-                        }
-                    } else if (format == OfflineMapFormat.GEOPACKAGE) {
-                        copyStatusText = "Построение пространственного индекса (R-Tree)..."
-                        val source: com.example.map.GeoPackageTileSource? = withContext(Dispatchers.IO) {
-                            try {
-                                com.example.map.vector.GeoPackageIndexer.buildSpatialIndex(targetFile) { layerName: String, done: Int, total: Int ->
-                                    coroutineScope.launch(Dispatchers.Main) {
-                                        if (total > 0) {
-                                            copyProgress = done.toFloat() / total
-                                            copyStatusText = "Индексация: $layerName ($done/$total)"
-                                        }
-                                    }
-                                }
-                            } catch (e: Exception) {
-                                android.util.Log.w("DataExchangeDialog", "Spatial index build issue: ${e.message}")
-                            }
-                            viewModel.attachGpkgFile(targetFile)
-                        }
-                        if (source != null) {
-                            val indexMode = if (source.isBtreeFallback) " (B-Tree fallback - медленный режим)" else " (R-Tree)"
-                            Toast.makeText(
-                                context,
-                                "Векторная карта GeoPackage '${source.name}' подключена$indexMode",
-                                Toast.LENGTH_LONG
-                            ).show()
-                            onDismiss()
-                        } else {
-                            Toast.makeText(context, "Не удалось открыть файл GeoPackage", Toast.LENGTH_LONG).show()
-                        }
-                    } else {
-                        copyStatusText = "Интеграция пакета тайлов..."
-                        val added = withContext(Dispatchers.IO) {
-                            viewModel.importOrntpackMerging(targetFile)
-                        }
-                        if (added != null) {
-                            Toast.makeText(
-                                context,
-                                if (added > 0) "Карта добавлена: $added новых тайлов"
-                                else "Все тайлы из файла уже есть на устройстве",
-                                Toast.LENGTH_LONG
-                            ).show()
-                            targetFile.delete()
-                            onDismiss()
-                        } else {
-                            Toast.makeText(
-                                context,
-                                "Не удалось открыть файл карты (.mbtiles или .orntpack)",
-                                Toast.LENGTH_LONG
-                            ).show()
-                        }
-                    }
-                } catch (e: Exception) {
-                    targetFileRef?.let { file ->
-                        runCatching { if (file.exists()) file.delete() }
-                    }
-                    Toast.makeText(context, "Ошибка импорта карты: ${e.localizedMessage ?: e.message}", Toast.LENGTH_LONG).show()
-                } finally {
-                    isProcessing = false
-                    copyProgress = 0f
-                    copyStatusText = null
-                }
-            }
+            val rawFileName = getFileName(context, uri)
+            MapBackupService.startImport(context, uri, rawFileName)
+            onDismiss()
         }
     }
 
@@ -922,7 +791,7 @@ fun DataExchangeDialog(
                                     modifier = Modifier.fillMaxWidth().testTag("merge_maps_button"),
                                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00897B))
                                 ) {
-                                    Icon(Icons.Default.MergeType, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Icon(Icons.AutoMirrored.Filled.MergeType, contentDescription = null, modifier = Modifier.size(18.dp))
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text("Объединить выбранные в один файл (${selectedSources.size})", fontWeight = FontWeight.Bold)
                                 }
@@ -1173,7 +1042,7 @@ fun DataExchangeDialog(
             onDismissRequest = { showMergeConfirmDialog = false },
             title = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.MergeType, contentDescription = null, tint = Color(0xFF81C784))
+                    Icon(Icons.AutoMirrored.Filled.MergeType, contentDescription = null, tint = Color(0xFF81C784))
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("Объединение карт", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                 }

@@ -71,7 +71,7 @@ abstract class AppDatabase : RoomDatabase() {
                                 waypointIds.forEachIndexed { orderIndex, waypointId ->
                                     db.execSQL(
                                         "INSERT OR REPLACE INTO route_waypoints (routeId, waypointId, orderIndex) VALUES (?, ?, ?)",
-                                        arrayOf(routeId, waypointId, orderIndex)
+                                        arrayOf<Any>(routeId, waypointId, orderIndex)
                                     )
                                 }
                             }

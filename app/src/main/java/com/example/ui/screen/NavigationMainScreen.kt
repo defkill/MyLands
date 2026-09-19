@@ -162,6 +162,32 @@ fun NavigationMainScreen(
     var showBatteryOptimizationDialog by remember { mutableStateOf(false) }
     var hasDismissedBatteryOptPrompt by remember { mutableStateOf(false) }
 
+    val isBackupServiceRunning by com.example.service.MapBackupService.isRunning.collectAsStateWithLifecycle()
+    val backupServiceProgress by com.example.service.MapBackupService.progress.collectAsStateWithLifecycle()
+    val backupServiceResult by com.example.service.MapBackupService.lastResult.collectAsStateWithLifecycle()
+
+    LaunchedEffect(backupServiceResult) {
+        backupServiceResult?.let { res ->
+            if (res.type == com.example.service.MapBackupService.OperationType.Import && res.success) {
+                viewModel.restoreSavedOfflineMaps()
+                if (res.outputFile != null) {
+                    val fileName = res.outputFile.name.lowercase()
+                    if (fileName.endsWith(".mbtiles")) {
+                        val attached = viewModel.attachMbtilesFile(res.outputFile)
+                        if (attached != null) {
+                            viewModel.setTileSource(attached)
+                        }
+                    } else if (fileName.endsWith(".gpkg")) {
+                        val attached = viewModel.attachGpkgFile(res.outputFile)
+                        if (attached != null) {
+                            viewModel.setTileSource(attached)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Location permission can be missing even when the system location toggle is on:
     // the OS switch and the per-app grant are separate things. Allow re-requesting it
     // straight from the GPS button instead of dead-ending on "Требуется разрешение GPS".
@@ -197,96 +223,9 @@ fun NavigationMainScreen(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         if (uri != null) {
-            importScope.launch {
-                var targetFileRef: File? = null
-                try {
-                    val rawDisplayName = getFileNameFromUri(context, uri)
-                    val isMbtiles = rawDisplayName.lowercase().endsWith(".mbtiles")
-                    val safeDisplayName = sanitizeFileName(
-                        rawDisplayName,
-                        if (isMbtiles) "offline_map.mbtiles" else "imported_offline.orntpack"
-                    )
-                    val targetDir = if (isMbtiles) File(context.filesDir, "maps").apply { mkdirs() } else context.cacheDir
-                    val tempFile = File(targetDir, safeDisplayName)
-                    targetFileRef = tempFile
-
-                    if (!tempFile.canonicalPath.startsWith(targetDir.canonicalPath + File.separator)) {
-                        throw SecurityException("Небезопасный путь к файлу: $rawDisplayName")
-                    }
-
-                    // Check space
-                    val sourceSize = withContext(Dispatchers.IO) {
-                        context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { c ->
-                            val idx = c.getColumnIndex(OpenableColumns.SIZE)
-                            if (c.moveToFirst() && idx >= 0 && !c.isNull(idx)) c.getLong(idx) else -1L
-                        } ?: -1L
-                    }
-
-                    val freeBytes = targetDir.usableSpace
-                    if (sourceSize > 0 && freeBytes < sourceSize + (100L * 1024 * 1024)) {
-                        val needMb = sourceSize / (1024 * 1024)
-                        val freeMb = freeBytes / (1024 * 1024)
-                        Toast.makeText(
-                            context,
-                            "Недостаточно места: нужно ~$needMb МБ, свободно $freeMb МБ",
-                            Toast.LENGTH_LONG
-                        ).show()
-                        return@launch
-                    }
-
-                    withContext(Dispatchers.IO) {
-                        context.contentResolver.openInputStream(uri)?.use { input ->
-                            FileOutputStream(tempFile).use { output ->
-                                input.copyTo(output, bufferSize = 1 shl 20)
-                            }
-                        } ?: throw java.io.IOException("Не удалось открыть выбранный файл")
-                    }
-
-                    val format = withContext(Dispatchers.IO) {
-                        com.example.map.OfflineMapDetector.detectFromFile(tempFile)
-                    }
-
-                    if (format == OfflineMapFormat.MBTILES) {
-                        val source = withContext(Dispatchers.IO) {
-                            viewModel.attachMbtilesFile(tempFile)
-                        }
-                        if (source != null) {
-                            val typeLabel = if (source.metadata.isVector) "векторная" else "растровая"
-                            Toast.makeText(
-                                context,
-                                "Карта MBTiles '${source.name}' ($typeLabel) подключена!",
-                                Toast.LENGTH_SHORT
-                            ).show()
-                        } else {
-                            Toast.makeText(context, "Не удалось открыть .mbtiles", Toast.LENGTH_LONG).show()
-                        }
-                    } else {
-                        val added = withContext(Dispatchers.IO) {
-                            viewModel.importOrntpackMerging(tempFile)
-                        }
-                        if (added != null) {
-                            Toast.makeText(
-                                context,
-                                if (added > 0) "Карта добавлена: $added новых тайлов"
-                                else "Все тайлы из файла уже есть в памяти",
-                                Toast.LENGTH_LONG
-                            ).show()
-                            tempFile.delete()
-                        } else {
-                            Toast.makeText(
-                                context,
-                                "Не удалось открыть файл карты (.mbtiles или .orntpack)",
-                                Toast.LENGTH_LONG
-                            ).show()
-                        }
-                    }
-                } catch (e: Exception) {
-                    targetFileRef?.let { file ->
-                        runCatching { if (file.exists()) file.delete() }
-                    }
-                    Toast.makeText(context, "Ошибка импорта: ${e.localizedMessage ?: e.message}", Toast.LENGTH_SHORT).show()
-                }
-            }
+            val rawDisplayName = getFileNameFromUri(context, uri)
+            com.example.service.MapBackupService.startImport(context, uri, rawDisplayName)
+            Toast.makeText(context, "Импорт карты запущен в фоне...", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -550,31 +489,34 @@ fun NavigationMainScreen(
                         }
                     }
 
-                    // Data Exchange (GPX / KML / .orntpack).
-                    // While a region download runs this chip doubles as its progress indicator
-                    // and as the way back into the (minimised) progress dialog, so downloading
-                    // no longer blocks the map for hours.
+                    // Data Exchange (GPX / KML / .orntpack / Backup / Restore / Merge).
+                    // While a region download or background service runs this chip doubles as its progress indicator
+                    // and as the way back into the progress dialog, so operations don't block the UI.
                     val activeDownload = downloadProgress
+                    val isServiceActive = isBackupServiceRunning
+                    val activeBackupProgress = backupServiceProgress
+                    val serviceFraction = activeBackupProgress?.percentage ?: 0f
                     val downloadFraction = activeDownload
                         ?.takeIf { it.total > 0 }
                         ?.let { it.done.toFloat() / it.total.toFloat() }
                         ?: 0f
+                    val effectiveFraction = if (isServiceActive) serviceFraction else downloadFraction
+                    val isAnyOperationRunning = isServiceActive || activeDownload != null
 
                     Surface(
                         onClick = {
                             if (activeDownload != null) {
                                 isDownloadMinimized = false
-                            } else {
-                                showDataExchangeDialog = true
                             }
+                            showDataExchangeDialog = true
                         },
                         color = Color(0xDD161C24),
                         shape = RoundedCornerShape(20.dp),
                         modifier = Modifier.testTag("data_exchange_button")
                     ) {
                         Box {
-                            // Green fill showing how far the download has got.
-                            if (activeDownload != null) {
+                            // Green fill showing how far the operation has got.
+                            if (isAnyOperationRunning) {
                                 Box(
                                     modifier = Modifier
                                         .matchParentSize()
@@ -583,31 +525,31 @@ fun NavigationMainScreen(
                                     Box(
                                         modifier = Modifier
                                             .fillMaxHeight()
-                                            .fillMaxWidth(downloadFraction)
+                                            .fillMaxWidth(effectiveFraction)
                                             .background(Color(0x662E7D32))
                                     )
                                 }
                             }
 
-                        Row(
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                if (activeDownload != null) Icons.Default.Download else Icons.Default.ImportExport,
-                                contentDescription = "Файлы",
-                                tint = Color(0xFF81C784),
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(3.dp))
-                            Text(
-                                text = if (activeDownload != null) {
-                                    "${(downloadFraction * 100).toInt()}%"
-                                } else "Файлы",
-                                color = Color.White,
-                                fontSize = 11.sp
-                            )
-                        }
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    if (isAnyOperationRunning) Icons.Default.Download else Icons.Default.ImportExport,
+                                    contentDescription = "Файлы",
+                                    tint = Color(0xFF81C784),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(3.dp))
+                                Text(
+                                    text = if (isAnyOperationRunning) {
+                                        "${(effectiveFraction * 100).toInt()}%"
+                                    } else "Файлы",
+                                    color = Color.White,
+                                    fontSize = 11.sp
+                                )
+                            }
                         }
                     }
 

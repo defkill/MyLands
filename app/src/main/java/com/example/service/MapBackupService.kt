@@ -13,13 +13,18 @@ import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
+import android.provider.OpenableColumns
 import androidx.annotation.RequiresApi
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.example.MainActivity
 import com.example.map.MbtilesMerger
 import com.example.map.MergeResult
+import com.example.map.OfflineMapDetector
+import com.example.map.OfflineMapFormat
 import com.example.map.TileManager
+import com.example.map.vector.GeoPackageIndexer
+import com.example.ui.components.sanitizeFileName
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -42,6 +47,7 @@ class MapBackupService : Service() {
         object Backup : OperationType()
         object Restore : OperationType()
         object Merge : OperationType()
+        object Import : OperationType()
     }
 
     data class Progress(
@@ -68,12 +74,15 @@ class MapBackupService : Service() {
         const val ACTION_BACKUP = "com.example.action.BACKUP_MAPS"
         const val ACTION_RESTORE = "com.example.action.RESTORE_MAPS"
         const val ACTION_MERGE_MAPS = "com.example.action.MERGE_MAPS"
+        const val ACTION_IMPORT_MAP = "com.example.action.IMPORT_MAP"
         const val ACTION_CANCEL = "com.example.action.CANCEL_BACKUP_MAPS"
 
         const val EXTRA_OUTPUT_PATH = "com.example.extra.OUTPUT_PATH"
         const val EXTRA_RESTORE_URI = "com.example.extra.RESTORE_URI"
         const val EXTRA_SOURCE_PATHS = "com.example.extra.SOURCE_PATHS"
         const val EXTRA_DELETE_SOURCES = "com.example.extra.DELETE_SOURCES"
+        const val EXTRA_SOURCE_URI = "com.example.extra.SOURCE_URI"
+        const val EXTRA_RAW_FILE_NAME = "com.example.extra.RAW_FILE_NAME"
 
         private val _isRunning = MutableStateFlow(false)
         val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
@@ -83,6 +92,21 @@ class MapBackupService : Service() {
 
         private val _lastResult = MutableStateFlow<Result?>(null)
         val lastResult: StateFlow<Result?> = _lastResult.asStateFlow()
+
+        fun startImport(context: Context, sourceUri: Uri, rawFileName: String) {
+            _lastResult.value = null
+
+            val intent = Intent(context, MapBackupService::class.java).apply {
+                action = ACTION_IMPORT_MAP
+                putExtra(EXTRA_SOURCE_URI, sourceUri.toString())
+                putExtra(EXTRA_RAW_FILE_NAME, rawFileName)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        }
 
         fun startBackup(context: Context, outputFile: File) {
             _lastResult.value = null
@@ -194,8 +218,171 @@ class MapBackupService : Service() {
                 val sourceFiles = paths.map { File(it) }
                 startMergeOperation(sourceFiles, File(outputPath), deleteSources)
             }
+            ACTION_IMPORT_MAP -> {
+                val uriStr = intent.getStringExtra(EXTRA_SOURCE_URI)
+                val rawFileName = intent.getStringExtra(EXTRA_RAW_FILE_NAME) ?: "map"
+                if (uriStr == null) {
+                    Log.e(TAG, "Missing arguments for ACTION_IMPORT_MAP")
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+                startImportOperation(Uri.parse(uriStr), rawFileName)
+            }
         }
         return START_NOT_STICKY
+    }
+
+    private fun startImportOperation(sourceUri: Uri, rawFileName: String) {
+        cancelRequested = false
+        _isRunning.value = true
+        _lastResult.value = null
+
+        val notification = buildNotification("Импорт и обработка карты…", 0f)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ServiceCompat.startForeground(
+                this,
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+        acquireWakeLock()
+
+        serviceScope.launch {
+            val isMbtiles = rawFileName.lowercase().endsWith(".mbtiles")
+            val isGpkg = rawFileName.lowercase().endsWith(".gpkg")
+            val isDirectMap = isMbtiles || isGpkg
+            val safeFileName = sanitizeFileName(
+                rawFileName,
+                if (isMbtiles) "map.mbtiles" else if (isGpkg) "map.gpkg" else "offline.orntpack"
+            )
+            val targetDir = if (isDirectMap) {
+                File(filesDir, "maps").apply { mkdirs() }
+            } else {
+                File(filesDir, "packages").apply { mkdirs() }
+            }
+            val targetFile = File(targetDir, safeFileName)
+            val indexFile = File(targetDir, "${targetFile.nameWithoutExtension}.spatialindex")
+
+            try {
+                if (!targetFile.canonicalPath.startsWith(targetDir.canonicalPath + File.separator)) {
+                    throw SecurityException("Небезопасный путь к файлу: $rawFileName")
+                }
+
+                // Explicitly remove remnants of any previous interrupted run
+                if (targetFile.exists()) targetFile.delete()
+                if (indexFile.exists()) indexFile.delete()
+                listOf("-wal", "-shm", "-journal").forEach { suffix ->
+                    File(targetDir, "${targetFile.name}$suffix").delete()
+                    File(targetDir, "${indexFile.name}$suffix").delete()
+                }
+
+                // 1. Check size and usable space
+                val sourceSize = contentResolver.query(sourceUri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { c ->
+                    val idx = c.getColumnIndex(OpenableColumns.SIZE)
+                    if (c.moveToFirst() && idx >= 0 && !c.isNull(idx)) c.getLong(idx) else -1L
+                } ?: -1L
+
+                val freeBytes = targetDir.usableSpace
+                if (sourceSize > 0 && freeBytes < sourceSize + (100L * 1024 * 1024)) {
+                    val needMb = sourceSize / (1024 * 1024)
+                    val freeMb = freeBytes / (1024 * 1024)
+                    throw java.io.IOException("Недостаточно места: нужно ~$needMb МБ, свободно $freeMb МБ")
+                }
+
+                // 2. Stream copy
+                _progress.value = Progress(OperationType.Import, 0, sourceSize, 0f, "Копирование файла...")
+                updateNotification("Импорт карты", "Копирование файла…", 0f)
+
+                contentResolver.openInputStream(sourceUri)?.use { input ->
+                    FileOutputStream(targetFile).use { output ->
+                        val buffer = ByteArray(1 shl 20) // 1 MB
+                        var copied = 0L
+                        while (true) {
+                            if (cancelRequested) throw java.util.concurrent.CancellationException("Отменено пользователем")
+                            val read = input.read(buffer)
+                            if (read <= 0) break
+                            output.write(buffer, 0, read)
+                            copied += read
+                            if (sourceSize > 0) {
+                                val p = (copied.toFloat() / sourceSize).coerceIn(0f, 1f)
+                                val copiedMb = copied / (1024 * 1024)
+                                val totalMb = sourceSize / (1024 * 1024)
+                                val text = "Копирование: $copiedMb из $totalMb МБ (${(p * 100).toInt()}%)"
+                                _progress.value = Progress(OperationType.Import, copied, sourceSize, p, text)
+                                updateNotification("Импорт карты", text, p)
+                            }
+                        }
+                    }
+                } ?: throw java.io.IOException("Не удалось открыть выбранный файл")
+
+                if (cancelRequested) throw java.util.concurrent.CancellationException("Отменено пользователем")
+
+                // 3. Format detection & Indexing
+                val format = OfflineMapDetector.detectFromFile(targetFile)
+
+                if (format == OfflineMapFormat.GEOPACKAGE) {
+                    _progress.value = Progress(OperationType.Import, 0, 100, 0f, "Построение пространственного индекса (R-Tree)...")
+                    updateNotification("Индексация GeoPackage", "Построение индекса R-Tree...", 0f)
+
+                    GeoPackageIndexer.buildSpatialIndex(targetFile) { layerName, done, total ->
+                        if (cancelRequested) throw java.util.concurrent.CancellationException("Отменено пользователем")
+                        val p = if (total > 0) (done.toFloat() / total).coerceIn(0f, 1f) else 0f
+                        val text = "Индексация: $layerName ($done/$total)"
+                        _progress.value = Progress(OperationType.Import, done.toLong(), total.toLong(), p, text)
+                        updateNotification("Индексация карты", text, p)
+                    }
+                } else if (format == OfflineMapFormat.ORNTPACK) {
+                    _progress.value = Progress(OperationType.Import, 0, 100, 0.5f, "Слияние тайлов в кэш...")
+                    updateNotification("Импорт пакета", "Интеграция тайлов...", 0.5f)
+                    val tm = TileManager(this@MapBackupService)
+                    tm.importOfflinePackage(targetFile) { prog ->
+                        if (cancelRequested) throw java.util.concurrent.CancellationException("Отменено пользователем")
+                        val p = if (prog.total > 0) (prog.done.toFloat() / prog.total).coerceIn(0f, 1f) else 0f
+                        val text = "Слияние тайлов: ${prog.done} из ${prog.total}"
+                        _progress.value = Progress(OperationType.Import, prog.done.toLong(), prog.total.toLong(), p, text)
+                        updateNotification("Импорт пакета", text, p)
+                    }
+                    targetFile.delete()
+                }
+
+                _lastResult.value = Result(
+                    OperationType.Import,
+                    success = true,
+                    count = 1,
+                    outputFile = if (format == OfflineMapFormat.ORNTPACK) null else targetFile
+                )
+                notifyFinished("Карта готова", "Импорт и обработка файла '${safeFileName}' завершены")
+            } catch (e: java.util.concurrent.CancellationException) {
+                Log.i(TAG, "Import cancelled by user")
+                runCatching {
+                    targetFile.delete()
+                    if (indexFile.exists()) indexFile.delete()
+                    listOf("-wal", "-shm", "-journal").forEach { suffix ->
+                        File(targetDir, "${targetFile.name}$suffix").delete()
+                        File(targetDir, "${indexFile.name}$suffix").delete()
+                    }
+                }
+                _lastResult.value = Result(OperationType.Import, false, 0, null, "Импорт отменен пользователем")
+                notifyFinished("Импорт отменен", "Операция была отменена")
+            } catch (e: Throwable) {
+                Log.e(TAG, "Import failed", e)
+                runCatching {
+                    targetFile.delete()
+                    if (indexFile.exists()) indexFile.delete()
+                }
+                _lastResult.value = Result(OperationType.Import, false, 0, null, e.localizedMessage ?: e.message)
+                notifyFinished("Ошибка импорта карт", e.localizedMessage ?: "Сбой импорта")
+            } finally {
+                _progress.value = null
+                _isRunning.value = false
+                releaseWakeLock()
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            }
+        }
     }
 
     private fun startMergeOperation(
