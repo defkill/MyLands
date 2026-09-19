@@ -100,6 +100,7 @@ class GeoPackageTileSource(
 
         try {
             for (layerName in GeoPackageStyle.RENDER_LAYER_ORDER) {
+                if (!GeoPackageStyle.isLayerPossiblyVisibleAtZoom(layerName, zoom)) continue
                 renderLayer(canvas, sDb, iDb, layerName, tileBounds, zoom)
             }
             return bitmap
@@ -143,12 +144,18 @@ class GeoPackageTileSource(
         }
 
         if (uncachedFids.isNotEmpty()) {
+            val zoomFilter = GeoPackageStyle.sqlVisibilityFilter(layerName, zoom)
             uncachedFids.chunked(500).forEach { chunk ->
                 val placeholders = chunk.joinToString(",") { "?" }
-                val args = chunk.map { it.toString() }.toTypedArray()
+                val whereClause = if (zoomFilter != null) {
+                    "rowid IN ($placeholders) AND ${zoomFilter.first}"
+                } else {
+                    "rowid IN ($placeholders)"
+                }
+                val args = (chunk.map { it.toString() } + (zoomFilter?.second ?: emptyList())).toTypedArray()
                 try {
                     sDb.rawQuery(
-                        "SELECT rowid, geom, fclass, name FROM \"$layerName\" WHERE rowid IN ($placeholders)",
+                        "SELECT rowid, geom, fclass, name FROM \"$layerName\" WHERE $whereClause",
                         args
                     ).use { cursor ->
                         while (cursor.moveToNext()) {

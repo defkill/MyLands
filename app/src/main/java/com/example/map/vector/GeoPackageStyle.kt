@@ -21,6 +21,90 @@ object GeoPackageStyle {
         "gis_osm_places_free"
     )
 
+    fun isLayerPossiblyVisibleAtZoom(layerName: String, zoom: Int): Boolean = when (layerName) {
+        "gis_osm_buildings_a_free" -> isBuildingVisibleAtZoom(zoom)
+        "gis_osm_water_a_free" -> isWaterVisibleAtZoom(zoom)
+        "gis_osm_railways_free" -> zoom >= 10
+        "gis_osm_roads_free" -> true
+        "gis_osm_landuse_a_free" -> true
+        "gis_osm_natural_a_free" -> true
+        "gis_osm_waterways_free" -> true
+        "gis_osm_places_free" -> true
+        "gis_osm_pois_free" -> true
+        else -> zoom >= 13
+    }
+
+    fun sqlVisibilityFilter(layerName: String, zoom: Int): Pair<String, List<String>>? {
+        when (layerName) {
+            "gis_osm_roads_free" -> {
+                return when {
+                    zoom < 8 -> {
+                        val classes = listOf("motorway", "trunk", "primary", "motorway_link", "trunk_link", "primary_link")
+                        val placeholders = classes.joinToString(",") { "?" }
+                        "fclass IN ($placeholders)" to classes
+                    }
+                    zoom < 11 -> {
+                        val classes = listOf("motorway", "trunk", "primary", "secondary", "tertiary", "motorway_link", "trunk_link", "primary_link", "secondary_link")
+                        val placeholders = classes.joinToString(",") { "?" }
+                        "fclass IN ($placeholders)" to classes
+                    }
+                    zoom < 14 -> {
+                        "fclass NOT IN ('path','footway','steps','cycleway','pedestrian','service') AND fclass NOT LIKE 'track_grade%'" to emptyList()
+                    }
+                    else -> null
+                }
+            }
+            "gis_osm_landuse_a_free" -> {
+                val classes = when {
+                    zoom < 9 -> listOf("forest", "residential", "military")
+                    zoom < 12 -> listOf("forest", "residential", "military", "farmland", "meadow", "commercial", "industrial")
+                    else -> return null
+                }
+                val placeholders = classes.joinToString(",") { "?" }
+                return "fclass IN ($placeholders)" to classes
+            }
+            "gis_osm_natural_a_free" -> {
+                val classes = when {
+                    zoom < 9 -> listOf("water", "wood", "glacier")
+                    zoom < 12 -> listOf("water", "wood", "glacier", "scrub", "heath", "grassland", "wetland")
+                    else -> return null
+                }
+                val placeholders = classes.joinToString(",") { "?" }
+                return "fclass IN ($placeholders)" to classes
+            }
+            "gis_osm_waterways_free" -> {
+                val classes = when {
+                    zoom < 10 -> listOf("river")
+                    zoom < 13 -> listOf("river", "canal", "stream")
+                    else -> return null
+                }
+                val placeholders = classes.joinToString(",") { "?" }
+                return "fclass IN ($placeholders)" to classes
+            }
+            "gis_osm_places_free" -> {
+                val classes = when {
+                    zoom < 6 -> listOf("country")
+                    zoom < 9 -> listOf("country", "state", "city")
+                    zoom < 12 -> listOf("country", "state", "city", "town")
+                    zoom < 14 -> listOf("country", "state", "city", "town", "village")
+                    else -> return null
+                }
+                val placeholders = classes.joinToString(",") { "?" }
+                return "fclass IN ($placeholders)" to classes
+            }
+            "gis_osm_pois_free" -> {
+                val classes = when {
+                    zoom < 13 -> listOf("hospital", "police", "fire_station", "airport", "helipad")
+                    zoom < 15 -> listOf("hospital", "police", "fire_station", "airport", "helipad", "pharmacy", "fuel", "bank")
+                    else -> return null
+                }
+                val placeholders = classes.joinToString(",") { "?" }
+                return "fclass IN ($placeholders)" to classes
+            }
+            else -> return null
+        }
+    }
+
     fun isFeatureVisibleAtZoom(layerName: String, attributes: Map<String, Any?>, zoom: Int): Boolean {
         val fclass = (attributes["fclass"] as? String)?.lowercase() ?: ""
         return when (layerName) {
