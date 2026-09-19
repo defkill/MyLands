@@ -541,11 +541,25 @@ class MapBackupService : Service() {
         serviceScope.launch {
             val tempZip = File(cacheDir, "temp_restore_backup.zip")
             try {
-                // 1. Copy uri stream to tempZip with progress
+                // 1. Check size and usable space
                 val sourceSize = contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.SIZE), null, null, null)?.use { c ->
                     val idx = c.getColumnIndex(android.provider.OpenableColumns.SIZE)
                     if (c.moveToFirst() && idx >= 0 && !c.isNull(idx)) c.getLong(idx) else -1L
                 } ?: -1L
+
+                val freeBytes = applicationContext.filesDir.usableSpace
+                if (sourceSize > 0 && freeBytes < sourceSize + (50L * 1024 * 1024)) {
+                    val needMb = sourceSize / (1024 * 1024)
+                    val freeMb = freeBytes / (1024 * 1024)
+                    val errorMsg = "Недостаточно места: нужно ~$needMb МБ, свободно $freeMb МБ"
+                    _lastResult.value = Result(OperationType.Restore, false, 0, null, errorMsg)
+                    notifyFinished("Ошибка восстановления карт", errorMsg)
+                    return@launch
+                }
+
+                // Copy uri stream to tempZip with progress
+                _progress.value = Progress(OperationType.Restore, 0, sourceSize, 0f, "Загрузка архива...")
+                updateNotification("Восстановление карт", "Загрузка архива…", 0f)
 
                 contentResolver.openInputStream(uri)?.use { input ->
                     FileOutputStream(tempZip).use { output ->

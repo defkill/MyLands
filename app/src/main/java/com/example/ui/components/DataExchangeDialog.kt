@@ -205,38 +205,10 @@ fun DataExchangeDialog(
     ) { uri: Uri? ->
         if (uri != null) {
             val rawFileName = getFileName(context, uri)
-            when {
-                rawFileName.lowercase().endsWith(".zip") -> {
-                    coroutineScope.launch {
-                        try {
-                            val sourceSize = withContext(Dispatchers.IO) {
-                                context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { c ->
-                                    val idx = c.getColumnIndex(OpenableColumns.SIZE)
-                                    if (c.moveToFirst() && idx >= 0 && !c.isNull(idx)) c.getLong(idx) else -1L
-                                } ?: -1L
-                            }
-                            val freeBytes = context.filesDir.usableSpace
-                            if (sourceSize > 0 && freeBytes < sourceSize + (50L * 1024 * 1024)) {
-                                val needMb = sourceSize / (1024 * 1024)
-                                val freeMb = freeBytes / (1024 * 1024)
-                                Toast.makeText(
-                                    context,
-                                    "Недостаточно места: нужно ~$needMb МБ, свободно $freeMb МБ",
-                                    Toast.LENGTH_LONG
-                                ).show()
-                                return@launch
-                            }
-
-                            MapBackupService.startRestore(context, uri)
-                            Toast.makeText(context, "Восстановление карт запущено в фоне", Toast.LENGTH_SHORT).show()
-                        } catch (e: Exception) {
-                            Toast.makeText(context, "Ошибка запуска восстановления: ${e.localizedMessage ?: e.message}", Toast.LENGTH_LONG).show()
-                        }
-                    }
-                }
-                else -> {
-                    MapBackupService.startImport(context, uri, rawFileName)
-                }
+            if (rawFileName.lowercase().endsWith(".zip")) {
+                MapBackupService.startRestore(context, uri)
+            } else {
+                MapBackupService.startImport(context, uri, rawFileName)
             }
             onDismiss()
         }
