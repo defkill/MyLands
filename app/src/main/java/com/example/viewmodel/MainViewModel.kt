@@ -199,7 +199,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val showRawTracks: StateFlow<Boolean> = _showRawTracks.asStateFlow()
 
     init {
-        orientationManager.start()
+        orientationManager.start("view_model")
         locationTracker.startListening()
         stepDetectorManager.start()
         stepDetectorManager.headingAgeProvider = { orientationManager.headingAgeMillis() }
@@ -1533,8 +1533,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         count
     }
 
+    fun startCompass() {
+        orientationManager.start("compass_ui")
+        val loc = gpsLocation.value ?: _manualPositionOverride.value ?: _mapCenter.value
+        loc?.let {
+            orientationManager.updateGeomagneticDeclination(it.latitude, it.longitude, it.altitude ?: 0.0)
+        }
+    }
+
+    fun stopCompass() {
+        orientationManager.stop("compass_ui")
+    }
+
     fun resumeSensors() {
-        orientationManager.start()
+        orientationManager.start("view_model")
         locationTracker.startListening()
         stepDetectorManager.start()
     }
@@ -1542,7 +1554,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun pauseSensors() {
         if (!TrackingService.isServiceRunning.value) {
             locationTracker.stopListening()
-            orientationManager.stop()
+            orientationManager.stop("view_model")
             stepDetectorManager.stop()
         }
     }

@@ -33,21 +33,29 @@ class OrientationManager(private val context: Context) : SensorEventListener {
     }
 
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
-    /**
-     * Prefer the wake-up rotation vector so heading keeps updating with the screen off.
-     *
-     * With the non-wake-up sensor the last heading before the CPU suspended is reused for every
-     * subsequent step, which projects the whole dead-reckoning leg as one straight line in a
-     * single direction no matter where the user actually walked.
-     */
+
+    // Standard continuous rotation vector for responsive UI
     private val rotationVectorSensor =
-        sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR, true)
-            ?: sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
+        sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
+            ?: sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR, true)
+
+    // Geomagnetic rotation vector (accel + mag only, no gyroscope needed)
+    private val geomagVectorSensor =
+        sensorManager.getDefaultSensor(Sensor.TYPE_GEOMAGNETIC_ROTATION_VECTOR)
+
     private val accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
     private val magnetometer = sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
 
     @Volatile
     private var isListening = false
+
+    private val activeRequesters = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+
+    @Volatile
+    private var isFirstReading = true
+
+    @Volatile
+    private var lastRotVectorTime = 0L
 
     /** Timestamp of the last orientation update, to detect a frozen heading. */
     @Volatile
@@ -98,24 +106,41 @@ class OrientationManager(private val context: Context) : SensorEventListener {
         } catch (_: Exception) {}
     }
 
-    fun start() {
+    fun start(tag: String = "default") {
         synchronized(this) {
-            if (isListening) return
-            isListening = true
-            if (rotationVectorSensor != null) {
-                sensorManager.registerListener(this, rotationVectorSensor, SensorManager.SENSOR_DELAY_UI)
-            } else {
+            activeRequesters.add(tag)
+            if (!isListening) {
+                isListening = true
+                isFirstReading = true
+                lastRotVectorTime = 0L
+                val rot = rotationVectorSensor ?: geomagVectorSensor
+                if (rot != null) {
+                    sensorManager.registerListener(this, rot, SensorManager.SENSOR_DELAY_UI)
+                }
+                // Always register accelerometer and magnetometer as fallback
                 accelerometer?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI) }
                 magnetometer?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI) }
             }
         }
     }
 
-    fun stop() {
+    fun stop(tag: String = "default") {
         synchronized(this) {
-            if (!isListening) return
-            isListening = false
-            sensorManager.unregisterListener(this)
+            activeRequesters.remove(tag)
+            if (activeRequesters.isEmpty() && isListening) {
+                isListening = false
+                sensorManager.unregisterListener(this)
+            }
+        }
+    }
+
+    fun forceStop() {
+        synchronized(this) {
+            activeRequesters.clear()
+            if (isListening) {
+                isListening = false
+                sensorManager.unregisterListener(this)
+            }
         }
     }
 
@@ -123,7 +148,8 @@ class OrientationManager(private val context: Context) : SensorEventListener {
         if (event == null) return
 
         when (event.sensor.type) {
-            Sensor.TYPE_ROTATION_VECTOR -> {
+            Sensor.TYPE_ROTATION_VECTOR,
+            Sensor.TYPE_GEOMAGNETIC_ROTATION_VECTOR -> {
                 // Truncate to 4 elements if needed for older hardware
                 val vec = if (event.values.size > 4) {
                     System.arraycopy(event.values, 0, truncatedVector, 0, 4)
@@ -133,11 +159,12 @@ class OrientationManager(private val context: Context) : SensorEventListener {
                 }
                 SensorManager.getRotationMatrixFromVector(rotationMatrix, vec)
                 processRotationMatrix(event.accuracy)
+                lastRotVectorTime = System.currentTimeMillis()
             }
             Sensor.TYPE_ACCELEROMETER -> {
                 System.arraycopy(event.values, 0, lastAcc, 0, 3)
                 hasAcc = true
-                if (hasMag) {
+                if (hasMag && (System.currentTimeMillis() - lastRotVectorTime > 1000L)) {
                     if (SensorManager.getRotationMatrix(rotationMatrix, null, lastAcc, lastMag)) {
                         processRotationMatrix(event.accuracy)
                     }
@@ -146,7 +173,7 @@ class OrientationManager(private val context: Context) : SensorEventListener {
             Sensor.TYPE_MAGNETIC_FIELD -> {
                 System.arraycopy(event.values, 0, lastMag, 0, 3)
                 hasMag = true
-                if (hasAcc) {
+                if (hasAcc && (System.currentTimeMillis() - lastRotVectorTime > 1000L)) {
                     if (SensorManager.getRotationMatrix(rotationMatrix, null, lastAcc, lastMag)) {
                         processRotationMatrix(event.accuracy)
                     }
@@ -168,8 +195,14 @@ class OrientationManager(private val context: Context) : SensorEventListener {
         // Continuous angular smoothing via sine/cosine
         val curCos = cos(rawAzimuthRad)
         val curSin = sin(rawAzimuthRad)
-        smoothCos = smoothCos * (1.0 - smoothingFactor) + curCos * smoothingFactor
-        smoothSin = smoothSin * (1.0 - smoothingFactor) + curSin * smoothingFactor
+        if (isFirstReading) {
+            smoothCos = curCos
+            smoothSin = curSin
+            isFirstReading = false
+        } else {
+            smoothCos = smoothCos * (1.0 - smoothingFactor) + curCos * smoothingFactor
+            smoothSin = smoothSin * (1.0 - smoothingFactor) + curSin * smoothingFactor
+        }
 
         var smoothedHeadingDeg = Math.toDegrees(atan2(smoothSin, smoothCos)).toFloat()
         smoothedHeadingDeg = (smoothedHeadingDeg % 360f + 360f) % 360f
@@ -189,7 +222,9 @@ class OrientationManager(private val context: Context) : SensorEventListener {
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
-        if (sensor?.type == Sensor.TYPE_ROTATION_VECTOR || sensor?.type == Sensor.TYPE_MAGNETIC_FIELD) {
+        if (sensor?.type == Sensor.TYPE_ROTATION_VECTOR ||
+            sensor?.type == Sensor.TYPE_GEOMAGNETIC_ROTATION_VECTOR ||
+            sensor?.type == Sensor.TYPE_MAGNETIC_FIELD) {
             lastAccuracy = accuracy
             _orientationData.value = _orientationData.value.copy(accuracy = accuracy)
         }

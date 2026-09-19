@@ -241,7 +241,7 @@ class TrackingService : Service() {
 
     private fun startSensorsAndGps() {
         locationTracker.startListening()
-        orientationManager.start()
+        orientationManager.start("tracking_service")
         stepDetectorManager.start()
         stepDetectorManager.headingAgeProvider = { orientationManager.headingAgeMillis() }
 
@@ -616,7 +616,7 @@ class TrackingService : Service() {
         try {
             stepDetectorManager.removeOnStepFlushedListener(pdrFlushListener)
             locationTracker.stopListening()
-            orientationManager.stop()
+            orientationManager.stop("tracking_service")
             stepDetectorManager.stop()
         } catch (_: Exception) {}
 

@@ -143,6 +143,15 @@ fun NavigationMainScreen(
     var showAddWaypointDialog by remember { mutableStateOf(false) }
     var showMiniCompassHud by remember { mutableStateOf(false) }
     var showCompassScreen by remember { mutableStateOf(false) }
+
+    val isCompassUiActive = showMiniCompassHud || showCompassScreen
+    LaunchedEffect(isCompassUiActive) {
+        if (isCompassUiActive) {
+            viewModel.startCompass()
+        } else {
+            viewModel.stopCompass()
+        }
+    }
     var showTriangulationDialog by remember { mutableStateOf(false) }
     var showTracksSheet by remember { mutableStateOf(false) }
     var showClearTilesConfirm by remember { mutableStateOf(false) }
@@ -317,7 +326,13 @@ fun NavigationMainScreen(
             ) {
                 // Compass Rose & Heading Pill
                 Surface(
-                    onClick = { showMiniCompassHud = !showMiniCompassHud },
+                    onClick = {
+                        val next = !showMiniCompassHud
+                        showMiniCompassHud = next
+                        if (next) {
+                            viewModel.startCompass()
+                        }
+                    },
                     color = Color(0xDD161C24),
                     shape = RoundedCornerShape(20.dp),
                     tonalElevation = 4.dp,
@@ -597,6 +612,7 @@ fun NavigationMainScreen(
                     angleUnit = userPreferences.defaultAngleUnit,
                     onExpand = {
                         showCompassScreen = true
+                        viewModel.startCompass()
                     },
                     onClose = {
                         showMiniCompassHud = false
