@@ -24,7 +24,7 @@ import com.example.data.entity.WaypointEntity
         RouteEntity::class,
         RouteWaypointCrossRef::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -81,8 +81,18 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Add spatial indices on coordinates and groupName for fast bounding-box queries
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_track_points_latitude_longitude` ON `track_points` (`latitude`, `longitude`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_waypoints_latitude_longitude` ON `waypoints` (`latitude`, `longitude`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_waypoints_groupName` ON `waypoints` (`groupName`)")
+            }
+        }
+
         val ALL_MIGRATIONS = arrayOf<Migration>(
-            MIGRATION_1_2
+            MIGRATION_1_2,
+            MIGRATION_2_3
         )
 
         fun getInstance(context: Context): AppDatabase {

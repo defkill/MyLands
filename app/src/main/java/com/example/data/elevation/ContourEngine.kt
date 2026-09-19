@@ -26,8 +26,16 @@ data class ContourTile(
  */
 class ContourEngine(private val elevationEngine: ElevationEngine) {
 
-    // Cache recently computed contour tiles so rendering remains at 60 FPS
-    private val tileCache = LruCache<String, ContourTile>(128)
+    // Cache recently computed contour tiles by memory size (KB) so rendering remains at 60 FPS
+    // without exceeding memory budget on low-RAM devices
+    private val maxCacheKb = ((Runtime.getRuntime().maxMemory() / 1024) / 16).toInt().coerceIn(2048, 16384)
+    private val tileCache = object : LruCache<String, ContourTile>(maxCacheKb) {
+        override fun sizeOf(key: String, value: ContourTile): Int {
+            val segmentsSize = value.segments.size * 112
+            val totalBytes = 64 + segmentsSize
+            return (totalBytes / 1024).coerceAtLeast(1)
+        }
+    }
 
     /**
      * Determines contour interval in meters depending on the map zoom level.

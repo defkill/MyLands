@@ -43,6 +43,11 @@ class MainActivity : ComponentActivity() {
     }
   }
 
+  override fun onLowMemory() {
+    super.onLowMemory()
+    viewModel.onLowMemory()
+  }
+
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     enableEdgeToEdge()

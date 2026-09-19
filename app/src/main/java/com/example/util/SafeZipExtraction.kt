@@ -14,11 +14,27 @@ object SafeZipExtraction {
         val target = File(baseDir, safeName)
         val baseCanonical = baseDir.canonicalPath
         val targetCanonical = target.canonicalPath
-        return if (targetCanonical == baseCanonical || targetCanonical.startsWith(baseCanonical + File.separator)) {
-            target
-        } else {
-            null
+        if (targetCanonical != baseCanonical && !targetCanonical.startsWith(baseCanonical + File.separator)) {
+            return null
         }
+
+        // Prevent Symlink Hijacking: verify that neither target nor any existing intermediate parent is a symbolic link
+        try {
+            var curr: File? = target
+            val basePath = baseDir.toPath()
+            while (curr != null) {
+                val currPath = curr.toPath()
+                if (curr.exists() && java.nio.file.Files.isSymbolicLink(currPath)) {
+                    return null
+                }
+                if (currPath == basePath) break
+                curr = curr.parentFile
+            }
+        } catch (_: Throwable) {
+            return null
+        }
+
+        return target
     }
 
     /**

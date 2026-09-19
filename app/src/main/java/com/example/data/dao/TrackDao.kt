@@ -34,8 +34,15 @@ interface TrackDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertPoint(point: TrackPointEntity): Long
 
+    @Transaction
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertPoints(points: List<TrackPointEntity>)
+
+    @Transaction
+    suspend fun replaceTrackPoints(trackId: Long, points: List<TrackPointEntity>) {
+        deletePointsByTrackId(trackId)
+        insertPoints(points)
+    }
 
     @Query("SELECT * FROM track_points WHERE trackId = :trackId ORDER BY timestamp ASC")
     fun getTrackPoints(trackId: Long): Flow<List<TrackPointEntity>>

@@ -31,7 +31,8 @@ data class TrackEntity(
     ],
     indices = [
         Index(value = ["trackId"]),
-        Index(value = ["trackId", "timestamp"])
+        Index(value = ["trackId", "timestamp"]),
+        Index(value = ["latitude", "longitude"])
     ]
 )
 data class TrackPointEntity(

@@ -316,49 +316,69 @@ class TileManager(private val context: Context) {
         // 5. Remote Network Download
         val urlString = source.getTileUrl(tile)
         if (urlString.isBlank()) return@withContext null
-        try {
-            val url = URL(urlString)
-            val connection = (url.openConnection() as HttpURLConnection).apply {
-                connectTimeout = 4000
-                readTimeout = 4000
-                // Tile servers (notably OSM) require a specific, identifying User-Agent and a
-                // Referer. Generic or missing headers are actively blocked with a 403 "Access
-                // blocked" tile. Keep the contact URL real so operators can reach the author.
-                setRequestProperty("User-Agent", TILE_USER_AGENT)
-                setRequestProperty("Referer", TILE_REFERER)
-            }
+        
+        var attempts = 0
+        val maxAttempts = 2
+        while (attempts < maxAttempts) {
+            attempts++
+            var connection: HttpURLConnection? = null
+            try {
+                val url = URL(urlString)
+                connection = (url.openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 7000
+                    readTimeout = 7000
+                    // Tile servers (notably OSM) require a specific, identifying User-Agent and a
+                    // Referer. Generic or missing headers are actively blocked with a 403 "Access
+                    // blocked" tile. Keep the contact URL real so operators can reach the author.
+                    setRequestProperty("User-Agent", TILE_USER_AGENT)
+                    setRequestProperty("Referer", TILE_REFERER)
+                }
 
-            // OSM serves "Access blocked" placeholder tiles with HTTP 200 plus an x-blocked
-            // header. Without this check the placeholder image gets decoded and written to the
-            // disk cache, so the map stays covered in block notices even after the cause is fixed.
-            val blockedHeader = connection.getHeaderField("x-blocked")
-            if (!blockedHeader.isNullOrBlank()) {
-                return@withContext null
-            }
+                // OSM serves "Access blocked" placeholder tiles with HTTP 200 plus an x-blocked
+                // header. Without this check the placeholder image gets decoded and written to the
+                // disk cache, so the map stays covered in block notices even after the cause is fixed.
+                val blockedHeader = connection.getHeaderField("x-blocked")
+                if (!blockedHeader.isNullOrBlank()) {
+                    return@withContext null
+                }
 
-            if (connection.responseCode == HttpURLConnection.HTTP_OK) {
-                connection.inputStream.use { stream ->
-                    val bytes = stream.readBytes()
-
-                    // Tiny payloads are also never real 256x256 map tiles.
-                    if (bytes.size < 1024) {
-                        return@withContext null
+                val code = connection.responseCode
+                if (code == 429 || code == 503) {
+                    if (attempts < maxAttempts) {
+                        kotlinx.coroutines.delay(400L)
+                        continue
                     }
+                    return@withContext null
+                }
 
-                    val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                    if (bmp != null) {
-                        memoryCache.put(cacheKey, bmp)
-                        // Save to disk asynchronously
-                        try {
-                            diskFile.parentFile?.mkdirs()
-                            FileOutputStream(diskFile).use { it.write(bytes) }
-                        } catch (_: Exception) {}
-                        return@withContext bmp
+                if (code == HttpURLConnection.HTTP_OK) {
+                    connection.inputStream.use { stream ->
+                        val bytes = stream.readBytes()
+
+                        // Tiny payloads are also never real 256x256 map tiles.
+                        if (bytes.size < 1024) {
+                            return@withContext null
+                        }
+
+                        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                        if (bmp != null) {
+                            memoryCache.put(cacheKey, bmp)
+                            // Save to disk asynchronously
+                            try {
+                                diskFile.parentFile?.mkdirs()
+                                FileOutputStream(diskFile).use { it.write(bytes) }
+                            } catch (_: Exception) {}
+                            return@withContext bmp
+                        }
                     }
                 }
+            } catch (_: Exception) {
+                if (attempts < maxAttempts) {
+                    try { kotlinx.coroutines.delay(250L) } catch (_: Exception) { return@withContext null }
+                }
+            } finally {
+                connection?.disconnect()
             }
-        } catch (_: Exception) {
-            // Network unavailable (offline)
         }
 
         null

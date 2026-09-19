@@ -1,13 +1,20 @@
 package com.example.data.entity
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.example.model.GeoPoint
 
 /**
  * Saved waypoint entity in Room database.
  */
-@Entity(tableName = "waypoints")
+@Entity(
+    tableName = "waypoints",
+    indices = [
+        Index(value = ["latitude", "longitude"]),
+        Index(value = ["groupName"])
+    ]
+)
 data class WaypointEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,

@@ -632,6 +632,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun onLowMemory() {
         tileManager.onLowMemory()
+        contourEngine.clearCache()
+        elevationEngine.close()
     }
 
     // --- Elevation (SRTM/HGT), line of sight, route profile ---

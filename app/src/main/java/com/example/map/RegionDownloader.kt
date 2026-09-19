@@ -216,45 +216,59 @@ object RegionDownloader {
     }
 
     private fun fetchTile(source: TileSource, tile: TileCoordinate, target: File): Boolean {
-        return try {
-            val url = URL(source.getTileUrl(tile))
-            val connection = (url.openConnection() as HttpURLConnection).apply {
-                connectTimeout = 8000
-                readTimeout = 8000
-                setRequestProperty("User-Agent", TileManager.TILE_USER_AGENT)
-                setRequestProperty("Referer", TileManager.TILE_REFERER)
+        var attempts = 0
+        val maxAttempts = 2
+        while (attempts < maxAttempts) {
+            attempts++
+            var conn: HttpURLConnection? = null
+            try {
+                val url = URL(source.getTileUrl(tile))
+                conn = (url.openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 7000
+                    readTimeout = 7000
+                    setRequestProperty("User-Agent", TileManager.TILE_USER_AGENT)
+                    setRequestProperty("Referer", TileManager.TILE_REFERER)
+                }
+
+                val blocked = conn.getHeaderField("x-blocked")
+                if (!blocked.isNullOrBlank()) {
+                    Log.w(TAG, "${source.id} ${tile.key}: blocked by provider ($blocked)")
+                    return false
+                }
+
+                val code = conn.responseCode
+                if (code == 429 || code == 503) {
+                    if (attempts < maxAttempts) {
+                        Thread.sleep(400L)
+                        continue
+                    }
+                    return false
+                }
+                if (code != HttpURLConnection.HTTP_OK) {
+                    Log.w(TAG, "${source.id} ${tile.key}: HTTP $code")
+                    return false
+                }
+
+                val bytes = conn.inputStream.use { it.readBytes() }
+                if (bytes.size < 1024) return false
+
+                val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+                if (opts.outWidth <= 0 || opts.outHeight <= 0) return false
+
+                target.parentFile?.mkdirs()
+                target.writeBytes(bytes)
+                return true
+            } catch (e: Exception) {
+                if (attempts >= maxAttempts) {
+                    Log.d(TAG, "Tile fetch failed ${tile.key} after $attempts attempts: ${e.message}")
+                    return false
+                }
+                try { Thread.sleep(250L) } catch (_: InterruptedException) { return false }
+            } finally {
+                conn?.disconnect()
             }
-
-            // Providers may answer 200 with a "blocked" placeholder image; treat it as a failure
-            // so the consecutive-failure guard can stop the job.
-            val blocked = connection.getHeaderField("x-blocked")
-            if (!blocked.isNullOrBlank()) {
-                Log.w(TAG, "${source.id} ${tile.key}: blocked by provider ($blocked)")
-                return false
-            }
-
-            val code = connection.responseCode
-            if (code != HttpURLConnection.HTTP_OK) {
-                Log.w(TAG, "${source.id} ${tile.key}: HTTP $code")
-                return false
-            }
-
-            val bytes = connection.inputStream.use { it.readBytes() }
-            if (bytes.size < 1024) return false
-
-            // Validate the image WITHOUT allocating it. Fully decoding every tile meant a fresh
-            // 256x256 bitmap (~256 KB) per request thousands of times over, which pushed the app
-            // into out-of-memory territory during long region downloads.
-            val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
-            if (opts.outWidth <= 0 || opts.outHeight <= 0) return false
-
-            target.parentFile?.mkdirs()
-            target.writeBytes(bytes)
-            true
-        } catch (e: Exception) {
-            Log.d(TAG, "Tile fetch failed ${tile.key}: ${e.message}")
-            false
         }
+        return false
     }
 }
