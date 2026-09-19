@@ -8,6 +8,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -17,6 +18,16 @@ import java.io.File
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33])
 class DataExchangeSecurityTest {
+
+    @Before
+    fun setUp() {
+        // Clear FileProvider's static strategy cache across Robolectric tests
+        try {
+            val field = androidx.core.content.FileProvider::class.java.getDeclaredField("sCache")
+            field.isAccessible = true
+            (field.get(null) as? MutableMap<*, *>)?.clear()
+        } catch (_: Exception) {}
+    }
 
     @Test
     fun `sanitizeFileName strips path traversal segments and dangerous characters`() {
@@ -164,6 +175,38 @@ class DataExchangeSecurityTest {
             assertFalse("evil_tile.png must not be extracted outside baseCacheDir", evilFile.exists())
 
             packageFile.delete()
+        }
+    }
+
+    @Test
+    fun testShareFile_backupPackage_resolvesFileProviderUri() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val exportsDir = File(context.cacheDir, "exports").apply { mkdirs() }
+        val testFile = File(exportsDir, "test.orntpack").apply { writeText("test") }
+        try {
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                testFile
+            )
+            assertNotNull(uri)
+        } finally {
+            testFile.delete()
+        }
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun testShareFile_outsideExports_throwsIllegalArgumentException() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val outsideFile = File(context.cacheDir, "outside_test.orntpack").apply { writeText("outside") }
+        try {
+            androidx.core.content.FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                outsideFile
+            )
+        } finally {
+            outsideFile.delete()
         }
     }
 }

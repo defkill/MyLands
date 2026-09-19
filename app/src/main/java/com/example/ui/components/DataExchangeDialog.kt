@@ -670,7 +670,8 @@ fun DataExchangeDialog(
                                 coroutineScope.launch {
                                     isProcessing = true
                                     try {
-                                        val packFile = File(context.cacheDir, "tactical_map_region.orntpack")
+                                        val exportsDir = File(context.cacheDir, "exports").apply { mkdirs() }
+                                        val packFile = File(exportsDir, "tactical_map_region.orntpack")
                                         val count = viewModel.packCurrentCache(packFile)
                                         if (count > 0) {
                                             pendingSaveFile = packFile

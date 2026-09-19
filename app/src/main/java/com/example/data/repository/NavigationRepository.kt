@@ -4,6 +4,7 @@ import androidx.room.withTransaction
 import com.example.data.AppDatabase
 import com.example.data.entity.RouteEntity
 import com.example.data.entity.RouteLeg
+import com.example.data.entity.RouteWaypointCrossRef
 import com.example.data.entity.TrackEntity
 import com.example.data.entity.TrackPointEntity
 import com.example.data.entity.WaypointEntity
@@ -17,6 +18,7 @@ class NavigationRepository(private val database: AppDatabase) {
     private val waypointDao = database.waypointDao()
     private val trackDao = database.trackDao()
     private val routeDao = database.routeDao()
+    private val routeWaypointDao = database.routeWaypointDao()
 
     val allWaypoints: Flow<List<WaypointEntity>> = waypointDao.getAllWaypoints()
     val allTracks: Flow<List<TrackEntity>> = trackDao.getAllTracks()
@@ -93,7 +95,20 @@ class NavigationRepository(private val database: AppDatabase) {
             waypointIdsCsv = csv,
             totalDistanceMeters = totalDist
         )
-        return routeDao.insert(entity)
+        return database.withTransaction {
+            val routeId = routeDao.insert(entity)
+            if (routeId > 0) {
+                val crossRefs = waypoints.mapIndexed { index, wp ->
+                    RouteWaypointCrossRef(
+                        routeId = routeId,
+                        waypointId = wp.id,
+                        orderIndex = index
+                    )
+                }
+                routeWaypointDao.insertAll(crossRefs)
+            }
+            routeId
+        }
     }
 
     suspend fun getRouteLegs(route: RouteEntity): List<RouteLeg> {
@@ -108,6 +123,11 @@ class NavigationRepository(private val database: AppDatabase) {
     }
 
     suspend fun getRoutePoints(route: RouteEntity): List<WaypointEntity> {
+        val fromTable = routeWaypointDao.getOrderedWaypointsForRoute(route.id)
+        if (fromTable.isNotEmpty()) {
+            return fromTable
+        }
+        // Fallback to waypointIdsCsv for backward compatibility / unmigrated entries
         val ids = route.parseWaypointIds()
         if (ids.isEmpty()) return emptyList()
         val points = waypointDao.getWaypointsByIds(ids).associateBy { it.id }
@@ -115,7 +135,10 @@ class NavigationRepository(private val database: AppDatabase) {
     }
 
     suspend fun deleteRoute(id: Long) {
-        routeDao.deleteById(id)
+        database.withTransaction {
+            routeWaypointDao.deleteByRouteId(id)
+            routeDao.deleteById(id)
+        }
     }
 
     // --- Track Management ---
