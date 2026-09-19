@@ -117,13 +117,14 @@ object GeoPackageIndexer {
                             val fid = cursor.getLong(0)
                             val geomBytes = cursor.getBlob(1)
                             if (geomBytes != null && geomBytes.size >= 8) {
-                                val bbox = GeoPackageGeometryParser.extractBoundingBox(geomBytes)
-                                if (bbox != null) {
-                                    insertStmt.bindLong(1, fid)
-                                    insertStmt.bindDouble(2, bbox.minX)
-                                    insertStmt.bindDouble(3, bbox.maxX)
-                                    insertStmt.bindDouble(4, bbox.minY)
-                                    insertStmt.bindDouble(5, bbox.maxY)
+                                val bboxes = GeoPackageGeometryParser.extractSegmentedBoundingBoxes(geomBytes, maxPointsPerSegment = 50)
+                                for (item in bboxes) {
+                                    val rtreeId = (fid shl 16) or (item.segmentIndex.toLong() and 0xFFFFL)
+                                    insertStmt.bindLong(1, rtreeId)
+                                    insertStmt.bindDouble(2, item.bbox.minX)
+                                    insertStmt.bindDouble(3, item.bbox.maxX)
+                                    insertStmt.bindDouble(4, item.bbox.minY)
+                                    insertStmt.bindDouble(5, item.bbox.maxY)
                                     insertStmt.executeInsert()
                                     insertStmt.clearBindings()
                                 }
@@ -160,11 +161,11 @@ object GeoPackageIndexer {
             if (anyBtreeFallback) {
                 Log.w(TAG, "ВНИМАНИЕ: R-Tree недоступен на этом устройстве, использован менее эффективный B-Tree fallback. Запросы к карте будут медленнее.")
             } else {
-                Log.i(TAG, "Используется высокопроизводительный пространственный индекс R-Tree.")
+                Log.i(TAG, "Используется высокопроизводительный пространственный индекс R-Tree с сегментацией длинных объектов.")
             }
 
             indexDb.execSQL("INSERT OR REPLACE INTO index_metadata (key, value) VALUES ('has_btree_fallback', ?)", arrayOf(anyBtreeFallback.toString()))
-            indexDb.execSQL("INSERT OR REPLACE INTO index_metadata (key, value) VALUES ('version', '1')")
+            indexDb.execSQL("INSERT OR REPLACE INTO index_metadata (key, value) VALUES ('version', '2')")
             indexDb.execSQL("INSERT OR REPLACE INTO index_metadata (key, value) VALUES ('source_file', ?)", arrayOf(sourceGpkg.name))
 
             Log.i(TAG, "Spatial index built successfully: ${indexFile.absolutePath} (${indexFile.length()} bytes)")
@@ -191,17 +192,19 @@ object GeoPackageIndexer {
         minY: Double,
         maxY: Double
     ): List<Long> {
-        val result = mutableListOf<Long>()
+        val result = LinkedHashSet<Long>()
         val rtreeSql = "SELECT id FROM rtree_$layerName WHERE minX <= ? AND maxX >= ? AND minY <= ? AND maxY >= ?"
         val btreeSql = "SELECT id FROM btree_$layerName WHERE minX <= ? AND maxX >= ? AND minY <= ? AND maxY >= ?"
 
         try {
             indexDb.rawQuery(rtreeSql, arrayOf(maxX.toString(), minX.toString(), maxY.toString(), minY.toString())).use { cursor ->
                 while (cursor.moveToNext()) {
-                    result.add(cursor.getLong(0))
+                    val rawId = cursor.getLong(0)
+                    val fid = if (rawId > 65535L) (rawId ushr 16) else rawId
+                    result.add(fid)
                 }
             }
-            return result
+            return result.toList()
         } catch (_: Exception) {
             // RTree table did not exist, fallback to BTree table
         }
@@ -209,13 +212,15 @@ object GeoPackageIndexer {
         try {
             indexDb.rawQuery(btreeSql, arrayOf(maxX.toString(), minX.toString(), maxY.toString(), minY.toString())).use { cursor ->
                 while (cursor.moveToNext()) {
-                    result.add(cursor.getLong(0))
+                    val rawId = cursor.getLong(0)
+                    val fid = if (rawId > 65535L) (rawId ushr 16) else rawId
+                    result.add(fid)
                 }
             }
         } catch (e: Exception) {
             Log.w(TAG, "Spatial index query failed for layer $layerName: ${e.message}")
         }
-        return result
+        return result.toList()
     }
 
     /**

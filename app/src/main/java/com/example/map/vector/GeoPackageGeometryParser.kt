@@ -15,6 +15,11 @@ data class DoublePoint(
     val lat: Double
 )
 
+data class IndexedBoundingBox(
+    val segmentIndex: Int,
+    val bbox: GeoBoundingBox
+)
+
 data class GeoFeature(
     val fid: Long,
     val geometryType: String, // "POINT", "LINESTRING", "POLYGON", "MULTILINESTRING", "MULTIPOLYGON", "MULTIPOINT"
@@ -46,6 +51,146 @@ object GeoPackageGeometryParser {
 
     private const val MAGIC_0 = 0x47.toByte() // 'G'
     private const val MAGIC_1 = 0x50.toByte() // 'P'
+
+    /**
+     * Extracts bounding boxes for indexing, segmenting long LINESTRING / MULTILINESTRING geometries
+     * (max [maxPointsPerSegment] points per segment with 1 point overlap) to prevent pathological
+     * oversized bounding boxes in spatial index.
+     */
+    fun extractSegmentedBoundingBoxes(
+        geomBytes: ByteArray,
+        maxPointsPerSegment: Int = 50
+    ): List<IndexedBoundingBox> {
+        if (geomBytes.size < 8) return emptyList()
+        if (geomBytes[0] != MAGIC_0 || geomBytes[1] != MAGIC_1) return emptyList()
+
+        val flags = geomBytes[3].toInt()
+        val isLittleEndian = (flags and 0x01) == 1
+        val envelopeIndicator = (flags and 0x0E) shr 1
+        val isEmpty = (flags and 0x10) != 0
+        if (isEmpty) return emptyList()
+
+        val wkbOffset = 8 + getEnvelopeByteLength(envelopeIndicator)
+        if (wkbOffset >= geomBytes.size) return emptyList()
+
+        try {
+            val headerOrder = if (isLittleEndian) ByteOrder.LITTLE_ENDIAN else ByteOrder.BIG_ENDIAN
+            val buffer = ByteBuffer.wrap(geomBytes, wkbOffset, geomBytes.size - wkbOffset)
+            if (buffer.remaining() < 5) return emptyList()
+
+            val byteOrderByte = buffer.get()
+            val order = if (byteOrderByte.toInt() == 1) ByteOrder.LITTLE_ENDIAN else ByteOrder.BIG_ENDIAN
+            buffer.order(order)
+
+            val rawType = buffer.int
+            val baseType = rawType % 1000
+
+            when (baseType) {
+                2 -> { // LINESTRING
+                    val numPoints = buffer.int
+                    if (numPoints <= 0 || buffer.remaining() < numPoints * 16) return emptyList()
+                    if (numPoints <= maxPointsPerSegment) {
+                        val bbox = computePointsBbox(buffer, numPoints)
+                        return if (bbox != null) listOf(IndexedBoundingBox(0, bbox)) else emptyList()
+                    } else {
+                        val points = ArrayList<DoublePoint>(numPoints)
+                        for (i in 0 until numPoints) {
+                            points.add(DoublePoint(buffer.double, buffer.double))
+                        }
+                        val segments = segmentLongLinestring(points, maxPointsPerSegment)
+                        val result = ArrayList<IndexedBoundingBox>(segments.size)
+                        segments.forEachIndexed { idx, segPts ->
+                            val bbox = computeBbox(segPts)
+                            if (bbox != null) {
+                                result.add(IndexedBoundingBox(idx.coerceAtMost(0xFFFF), bbox))
+                            }
+                        }
+                        return result
+                    }
+                }
+                5 -> { // MULTILINESTRING
+                    val numGeoms = buffer.int
+                    if (numGeoms <= 0) return emptyList()
+                    val result = mutableListOf<IndexedBoundingBox>()
+                    var segCounter = 0
+                    for (g in 0 until numGeoms) {
+                        if (buffer.remaining() < 5) break
+                        val subOrder = if (buffer.get().toInt() == 1) ByteOrder.LITTLE_ENDIAN else ByteOrder.BIG_ENDIAN
+                        buffer.order(subOrder)
+                        val subType = buffer.int % 1000
+                        if (subType == 2) {
+                            val numPoints = buffer.int
+                            if (numPoints > 0 && buffer.remaining() >= numPoints * 16) {
+                                if (numPoints <= maxPointsPerSegment) {
+                                    val bbox = computePointsBbox(buffer, numPoints)
+                                    if (bbox != null) {
+                                        result.add(IndexedBoundingBox((segCounter++).coerceAtMost(0xFFFF), bbox))
+                                    }
+                                } else {
+                                    val points = ArrayList<DoublePoint>(numPoints)
+                                    for (p in 0 until numPoints) {
+                                        points.add(DoublePoint(buffer.double, buffer.double))
+                                    }
+                                    val segments = segmentLongLinestring(points, maxPointsPerSegment)
+                                    for (segPts in segments) {
+                                        val bbox = computeBbox(segPts)
+                                        if (bbox != null) {
+                                            result.add(IndexedBoundingBox((segCounter++).coerceAtMost(0xFFFF), bbox))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    return result
+                }
+                else -> {
+                    val bbox = extractBoundingBox(geomBytes)
+                    return if (bbox != null) listOf(IndexedBoundingBox(0, bbox)) else emptyList()
+                }
+            }
+        } catch (_: Throwable) {
+            val bbox = extractBoundingBox(geomBytes)
+            return if (bbox != null) listOf(IndexedBoundingBox(0, bbox)) else emptyList()
+        }
+    }
+
+    private fun segmentLongLinestring(points: List<DoublePoint>, maxPointsPerSegment: Int = 50): List<List<DoublePoint>> {
+        if (points.size <= maxPointsPerSegment) return listOf(points)
+        return points.windowed(maxPointsPerSegment, step = maxPointsPerSegment - 1, partialWindows = true)
+    }
+
+    private fun computePointsBbox(buffer: ByteBuffer, numPoints: Int): GeoBoundingBox? {
+        if (numPoints <= 0) return null
+        var minX = Double.POSITIVE_INFINITY
+        var maxX = Double.NEGATIVE_INFINITY
+        var minY = Double.POSITIVE_INFINITY
+        var maxY = Double.NEGATIVE_INFINITY
+        for (i in 0 until numPoints) {
+            val x = buffer.double
+            val y = buffer.double
+            if (x < minX) minX = x
+            if (x > maxX) maxX = x
+            if (y < minY) minY = y
+            if (y > maxY) maxY = y
+        }
+        return if (minX.isFinite()) GeoBoundingBox(minX, minY, maxX, maxY) else null
+    }
+
+    private fun computeBbox(points: List<DoublePoint>): GeoBoundingBox? {
+        if (points.isEmpty()) return null
+        var minX = Double.POSITIVE_INFINITY
+        var maxX = Double.NEGATIVE_INFINITY
+        var minY = Double.POSITIVE_INFINITY
+        var maxY = Double.NEGATIVE_INFINITY
+        for (pt in points) {
+            if (pt.lon < minX) minX = pt.lon
+            if (pt.lon > maxX) maxX = pt.lon
+            if (pt.lat < minY) minY = pt.lat
+            if (pt.lat > maxY) maxY = pt.lat
+        }
+        return if (minX.isFinite()) GeoBoundingBox(minX, minY, maxX, maxY) else null
+    }
 
     /**
      * Fast extraction of BoundingBox without fully decoding entire WKB geometry.

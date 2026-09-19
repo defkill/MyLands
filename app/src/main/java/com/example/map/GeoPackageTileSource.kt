@@ -39,7 +39,7 @@ class GeoPackageTileSource(
     name = file.nameWithoutExtension,
     type = MapTileType.GEOPACKAGE,
     urlTemplate = "",
-    maxZoom = 20,
+    maxZoom = 17,
     minZoom = 1
 ), Closeable {
 
@@ -81,6 +81,7 @@ class GeoPackageTileSource(
      * Renders a 512x512 RGB_565 bitmap tile for given zoom, x, y coordinates.
      */
     fun getTileBitmap(zoom: Int, x: Int, y: Int): Bitmap? {
+        if (zoom < minZoom || zoom > maxZoom) return null
         val sDb = sourceDb ?: return null
         val iDb = indexDb ?: return null
         if (!sDb.isOpen || !iDb.isOpen) return null

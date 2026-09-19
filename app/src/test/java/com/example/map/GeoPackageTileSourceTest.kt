@@ -37,7 +37,8 @@ class GeoPackageTileSourceTest {
         coordinates: List<List<DoublePoint>>,
         envelope: GeoBoundingBox? = null
     ): ByteArray {
-        val buffer = ByteBuffer.allocate(1024).order(ByteOrder.LITTLE_ENDIAN)
+        val requiredSize = coordinates.sumOf { it.size } * 16 + 128
+        val buffer = ByteBuffer.allocate(requiredSize).order(ByteOrder.LITTLE_ENDIAN)
         val envelopeIndicator = if (envelope != null) 1 else 0
         val flags = 1 or (envelopeIndicator shl 1)
 
@@ -135,5 +136,51 @@ class GeoPackageTileSourceTest {
         assertEquals(Bitmap.Config.RGB_565, bitmap.config)
 
         tileSource.close()
+    }
+
+    @Test
+    fun testSegmentation_PreventsFalsePositiveHitsInCorners() = runBlocking {
+        val gpkgFile = File(testDir, "long_diagonal_road.gpkg")
+        val db = SQLiteDatabase.openOrCreateDatabase(gpkgFile, null)
+        try {
+            db.execSQL("CREATE TABLE gpkg_contents (table_name TEXT, data_type TEXT, identifier TEXT)")
+            db.execSQL("INSERT INTO gpkg_contents VALUES ('gis_osm_roads_free', 'features', 'roads')")
+
+            db.execSQL("CREATE TABLE gpkg_geometry_columns (table_name TEXT, column_name TEXT, geometry_type_name TEXT, srs_id INTEGER, z INTEGER, m INTEGER)")
+            db.execSQL("INSERT INTO gpkg_geometry_columns VALUES ('gis_osm_roads_free', 'geom', 'LINESTRING', 4326, 0, 0)")
+
+            db.execSQL("CREATE TABLE gis_osm_roads_free (fid INTEGER PRIMARY KEY, geom BLOB, fclass TEXT, name TEXT)")
+
+            // Diagonal road with 150 points from (1.0, 42.0) to (2.0, 43.0)
+            val points = (0..150).map { i ->
+                val frac = i / 150.0
+                DoublePoint(1.0 + frac * 1.0, 42.0 + frac * 1.0)
+            }
+            val roadBlob = createGpkgGeometryBlob(2, listOf(points))
+            db.execSQL("INSERT INTO gis_osm_roads_free (fid, geom, fclass, name) VALUES (10, ?, 'motorway', 'M06 Highway')", arrayOf(roadBlob))
+        } finally {
+            db.close()
+        }
+
+        val indexFile = GeoPackageIndexer.buildSpatialIndex(gpkgFile)
+        val indexDb = SQLiteDatabase.openDatabase(indexFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
+        try {
+            // 1. Box directly on the line at (1.05, 42.05) -> SHOULD match fid 10
+            val hitOnLine = GeoPackageIndexer.querySpatialIndex(
+                indexDb, "gis_osm_roads_free",
+                minX = 1.04, maxX = 1.06, minY = 42.04, maxY = 42.06
+            )
+            assertEquals(listOf(10L), hitOnLine)
+
+            // 2. Box in opposite corner (1.05, 42.95) -> Inside overall bbox [1.0..2.0, 42.0..43.0]
+            // BUT far from the diagonal road! With segmentation, this corner tile has NO segments and returns EMPTY.
+            val hitInCorner = GeoPackageIndexer.querySpatialIndex(
+                indexDb, "gis_osm_roads_free",
+                minX = 1.04, maxX = 1.06, minY = 42.94, maxY = 42.96
+            )
+            assertTrue("Segmented index must NOT match far-away corner inside overall bbox", hitInCorner.isEmpty())
+        } finally {
+            indexDb.close()
+        }
     }
 }
